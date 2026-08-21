@@ -1,0 +1,236 @@
+@import 'tailwindcss';
+
+@import 'tw-animate-css';
+
+@source '../views';
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+
+@custom-variant dark (&:is(.dark *));
+
+@theme {
+    /* ---------------------------------------------------------------
+     * Tipografi — skala sengaja diperkecil untuk UI padat data.
+     * Base 13px, dipasangkan dengan x-height Plus Jakarta Sans yang
+     * tinggi sehingga tetap terbaca jelas.
+     * ------------------------------------------------------------- */
+    --font-sans:
+        'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif,
+        'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji';
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+    --text-2xs: 0.625rem; /* 10px — label tabel, eyebrow */
+    --text-2xs--line-height: 1.4;
+    --text-xs: 0.6875rem; /* 11px */
+    --text-xs--line-height: 1.45;
+    --text-sm: 0.75rem; /* 12px — teks sekunder */
+    --text-sm--line-height: 1.5;
+    --text-base: 0.8125rem; /* 13px — teks utama */
+    --text-base--line-height: 1.55;
+    --text-lg: 0.875rem; /* 14px */
+    --text-lg--line-height: 1.5;
+    --text-xl: 1rem; /* 16px — judul kartu */
+    --text-xl--line-height: 1.4;
+    --text-2xl: 1.125rem; /* 18px — judul halaman */
+    --text-2xl--line-height: 1.35;
+    --text-3xl: 1.375rem; /* 22px — angka KPI */
+    --text-3xl--line-height: 1.25;
+    --text-4xl: 1.75rem; /* 28px */
+    --text-4xl--line-height: 1.2;
+
+    --radius-lg: var(--radius);
+    --radius-md: calc(var(--radius) - 2px);
+    --radius-sm: calc(var(--radius) - 4px);
+
+    --color-background: var(--background);
+    --color-foreground: var(--foreground);
+
+    --color-card: var(--card);
+    --color-card-foreground: var(--card-foreground);
+
+    --color-popover: var(--popover);
+    --color-popover-foreground: var(--popover-foreground);
+
+    --color-primary: var(--primary);
+    --color-primary-foreground: var(--primary-foreground);
+
+    --color-secondary: var(--secondary);
+    --color-secondary-foreground: var(--secondary-foreground);
+
+    --color-muted: var(--muted);
+    --color-muted-foreground: var(--muted-foreground);
+
+    --color-accent: var(--accent);
+    --color-accent-foreground: var(--accent-foreground);
+
+    --color-destructive: var(--destructive);
+    --color-destructive-foreground: var(--destructive-foreground);
+
+    --color-success: var(--success);
+    --color-success-foreground: var(--success-foreground);
+    --color-warning: var(--warning);
+    --color-warning-foreground: var(--warning-foreground);
+
+    --color-border: var(--border);
+    --color-input: var(--input);
+    --color-ring: var(--ring);
+
+    --color-chart-1: var(--chart-1);
+    --color-chart-2: var(--chart-2);
+    --color-chart-3: var(--chart-3);
+    --color-chart-4: var(--chart-4);
+    --color-chart-5: var(--chart-5);
+
+    --color-sidebar: var(--sidebar);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-ring: var(--sidebar-ring);
+}
+
+/* -------------------------------------------------------------------
+ * Palet: netral abu bernuansa dingin + aksen jade.
+ * Jade dipilih karena aplikasi ini berurusan dengan uang dan
+ * persediaan — hijau tua terbaca "pembukuan", bukan "startup ungu".
+ * ----------------------------------------------------------------- */
+:root {
+    --background: oklch(0.985 0.002 240);
+    --foreground: oklch(0.21 0.015 250);
+
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.21 0.015 250);
+
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.21 0.015 250);
+
+    --primary: oklch(0.52 0.098 172);
+    --primary-foreground: oklch(0.99 0.005 172);
+
+    --secondary: oklch(0.965 0.004 245);
+    --secondary-foreground: oklch(0.3 0.015 250);
+
+    --muted: oklch(0.965 0.004 245);
+    --muted-foreground: oklch(0.53 0.014 250);
+
+    --accent: oklch(0.955 0.012 172);
+    --accent-foreground: oklch(0.36 0.06 172);
+
+    --destructive: oklch(0.58 0.204 25);
+    --destructive-foreground: oklch(0.99 0.005 25);
+
+    --success: oklch(0.56 0.13 155);
+    --success-foreground: oklch(0.99 0.005 155);
+
+    --warning: oklch(0.68 0.14 70);
+    --warning-foreground: oklch(0.24 0.05 70);
+
+    --border: oklch(0.915 0.005 245);
+    --input: oklch(0.915 0.005 245);
+    --ring: oklch(0.52 0.098 172);
+
+    --chart-1: oklch(0.52 0.098 172);
+    --chart-2: oklch(0.62 0.09 210);
+    --chart-3: oklch(0.68 0.14 70);
+    --chart-4: oklch(0.58 0.11 300);
+    --chart-5: oklch(0.62 0.15 25);
+
+    --radius: 0.5rem;
+
+    --sidebar: oklch(0.975 0.003 245);
+    --sidebar-foreground: oklch(0.3 0.015 250);
+    --sidebar-primary: oklch(0.52 0.098 172);
+    --sidebar-primary-foreground: oklch(0.99 0.005 172);
+    --sidebar-accent: oklch(0.94 0.012 172);
+    --sidebar-accent-foreground: oklch(0.33 0.06 172);
+    --sidebar-border: oklch(0.912 0.005 245);
+    --sidebar-ring: oklch(0.52 0.098 172);
+}
+
+.dark {
+    --background: oklch(0.19 0.012 250);
+    --foreground: oklch(0.94 0.005 245);
+
+    --card: oklch(0.225 0.013 250);
+    --card-foreground: oklch(0.94 0.005 245);
+
+    --popover: oklch(0.225 0.013 250);
+    --popover-foreground: oklch(0.94 0.005 245);
+
+    --primary: oklch(0.72 0.11 168);
+    --primary-foreground: oklch(0.19 0.03 168);
+
+    --secondary: oklch(0.28 0.014 250);
+    --secondary-foreground: oklch(0.94 0.005 245);
+
+    --muted: oklch(0.28 0.014 250);
+    --muted-foreground: oklch(0.68 0.012 248);
+
+    --accent: oklch(0.3 0.03 168);
+    --accent-foreground: oklch(0.86 0.07 168);
+
+    --destructive: oklch(0.62 0.19 25);
+    --destructive-foreground: oklch(0.98 0.005 25);
+
+    --success: oklch(0.68 0.13 155);
+    --success-foreground: oklch(0.18 0.04 155);
+
+    --warning: oklch(0.76 0.13 72);
+    --warning-foreground: oklch(0.22 0.05 72);
+
+    --border: oklch(0.31 0.012 250);
+    --input: oklch(0.31 0.012 250);
+    --ring: oklch(0.72 0.11 168);
+
+    --chart-1: oklch(0.72 0.11 168);
+    --chart-2: oklch(0.7 0.1 215);
+    --chart-3: oklch(0.76 0.13 72);
+    --chart-4: oklch(0.68 0.12 300);
+    --chart-5: oklch(0.68 0.15 25);
+
+    --sidebar: oklch(0.215 0.013 250);
+    --sidebar-foreground: oklch(0.88 0.006 245);
+    --sidebar-primary: oklch(0.72 0.11 168);
+    --sidebar-primary-foreground: oklch(0.19 0.03 168);
+    --sidebar-accent: oklch(0.3 0.028 168);
+    --sidebar-accent-foreground: oklch(0.86 0.07 168);
+    --sidebar-border: oklch(0.3 0.012 250);
+    --sidebar-ring: oklch(0.72 0.11 168);
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+
+    html {
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        color-scheme: light;
+    }
+
+    html.dark {
+        color-scheme: dark;
+    }
+
+    body {
+        @apply bg-background text-foreground text-base;
+        font-feature-settings: 'cv11', 'ss01';
+        font-variation-settings: normal;
+    }
+
+    /* Angka pada tabel & KPI selalu sejajar kolomnya */
+    .tabular,
+    table td,
+    table th {
+        font-variant-numeric: tabular-nums;
+    }
+}
+
+@layer components {
+    /* Label kecil huruf kapital — dipakai di header tabel & eyebrow kartu */
+    .label-eyebrow {
+        @apply text-2xs font-semibold tracking-[0.08em] text-muted-foreground uppercase;
+    }
+}
