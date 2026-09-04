@@ -1,31 +1,22 @@
-import { Head } from '@inertiajs/react';
-import { useMemo, useState } from 'react';
-import { Plus, TriangleAlert, Wallet } from 'lucide-react';
-import AppLayout from '@/layouts/app-layout';
+import { Chip, Field, FlashMessage, NativeSelect, ServerPagination, type Paginated } from '@/components/master-ui';
+import { EmptyRow, PageHeader, Panel, formatDate, formatRupiah } from '@/components/pos-ui';
 import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import {
-    CompositionBar,
-    EmptyRow,
-    PageHeader,
-    Panel,
-    SearchInput,
-    StatusBadge,
-    TablePagination,
-    formatDate,
-    formatRupiah,
-    usePagination,
-} from '@/components/pos-ui';
-import { cashSummary, expenseByCategory, expenses } from '@/data/dummy';
+import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
+import { Head, useForm, usePage } from '@inertiajs/react';
+import { Ban, Wallet } from 'lucide-react';
+import { useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Keuangan', href: '#' },
+    { title: 'Banking', href: '#' },
     { title: 'Kas & Biaya', href: '/biaya' },
 ];
 
-const PAYMENT_LABEL: Record<string, string> = {
+const LABEL_METODE: Record<string, string> = {
     CASH: 'Tunai',
     QRIS: 'QRIS',
     DEBIT: 'Debit',
@@ -34,25 +25,80 @@ const PAYMENT_LABEL: Record<string, string> = {
     E_WALLET: 'E-Wallet',
 };
 
+interface Kategori {
+    id: number;
+    name: string;
+}
+
+interface Biaya {
+    id: number;
+    number: string;
+    date: string;
+    category: string;
+    description: string;
+    amount: number;
+    paymentType: string;
+    status: 'POSTED' | 'VOID';
+    voidReason: string | null;
+    author: string | null;
+}
+
 export default function BiayaIndex() {
-    const [search, setSearch] = useState('');
+    const { expenses, categories, summary, today } = usePage().props as unknown as {
+        expenses: Paginated<Biaya>;
+        categories: Kategori[];
+        summary: { countBulanIni: number; totalBulanIni: number; totalTunaiBulanIni: number };
+        today: string;
+    };
 
-    const visible = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return expenses;
-        return expenses.filter(
-            (e) => e.description.toLowerCase().includes(q) || e.category.toLowerCase().includes(q),
-        );
-    }, [search]);
+    const [dialogTerbuka, setDialogTerbuka] = useState(false);
+    const [detail, setDetail] = useState<Biaya | null>(null);
+    const [batalTerbuka, setBatalTerbuka] = useState(false);
 
-    const pagination = usePagination(visible, 10);
-    const totalBiaya = expenses.filter((e) => e.status === 'POSTED').reduce((s, e) => s + e.amount, 0);
+    const form = useForm({
+        expense_category_id: '' as string | number,
+        transaction_date: today,
+        description: '',
+        amount: '',
+        payment_type: 'CASH',
+    });
 
-    const arusKas = [
-        { label: 'Saldo awal', value: cashSummary.opening, tone: '' },
-        { label: 'Kas masuk', value: cashSummary.cashIn, tone: 'text-success' },
-        { label: 'Kas keluar', value: -cashSummary.cashOut, tone: 'text-destructive' },
-        { label: 'Saldo akhir', value: cashSummary.closing, tone: 'font-semibold' },
+    const voidForm = useForm({ void_reason: '' });
+
+    function bukaDialog() {
+        form.setData({ expense_category_id: '', transaction_date: today, description: '', amount: '', payment_type: 'CASH' });
+        form.clearErrors();
+        setDialogTerbuka(true);
+    }
+
+    function simpan() {
+        form.post('/biaya', {
+            preserveScroll: true,
+            onSuccess: () => setDialogTerbuka(false),
+        });
+    }
+
+    function bukaBatal() {
+        voidForm.setData('void_reason', '');
+        voidForm.clearErrors();
+        setBatalTerbuka(true);
+    }
+
+    function batalkan() {
+        if (!detail) return;
+        voidForm.post(`/biaya/${detail.id}/batal`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setBatalTerbuka(false);
+                setDetail(null);
+            },
+        });
+    }
+
+    const kartu = [
+        { label: 'Biaya bulan ini', value: String(summary.countBulanIni) },
+        { label: 'Total bulan ini', value: formatRupiah(summary.totalBulanIni) },
+        { label: 'Total tunai bulan ini', value: formatRupiah(summary.totalTunaiBulanIni) },
     ];
 
     return (
@@ -62,95 +108,228 @@ export default function BiayaIndex() {
             <div className="flex flex-col gap-4 p-4 md:p-5">
                 <PageHeader
                     title="Kas & Biaya"
-                    subtitle="Biaya operasional mengurangi laba bersih periode, tetapi tidak pernah menyentuh harga pokok persediaan."
+                    subtitle="Biaya operasional — tidak memengaruhi HPP, murni mengurangi laba bersih."
                     action={
-                        <Button size="sm">
-                            <Plus className="mr-1 h-3.5 w-3.5" /> Catat Biaya
+                        <Button size="sm" className="h-8" onClick={bukaDialog}>
+                            <Wallet className="h-3.5 w-3.5" /> Biaya baru
                         </Button>
                     }
                 />
 
-                <div className="grid gap-4 lg:grid-cols-3">
-                    <Panel title="Posisi Kas" description="Periode berjalan" className="lg:col-span-2">
-                        <dl className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-                            {arusKas.map((k) => (
-                                <div key={k.label}>
-                                    <dt className="label-eyebrow">{k.label}</dt>
-                                    <dd className={cn('mt-0.5 font-mono text-lg tabular', k.tone)}>
-                                        {formatRupiah(k.value)}
-                                    </dd>
-                                </div>
-                            ))}
-                        </dl>
+                <FlashMessage />
 
-                        {cashSummary.difference !== 0 && (
-                            <p className="mt-4 flex items-start gap-2 rounded-md bg-warning/10 px-3 py-2 text-xs">
-                                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
-                                <span>
-                                    Selisih kas {formatRupiah(cashSummary.difference)} belum diselesaikan. Selisih tidak
-                                    dapat dihapus — hanya diselesaikan lalu ditandai selesai.
-                                </span>
-                            </p>
-                        )}
-                    </Panel>
-
-                    <Panel title="Biaya per Kategori" description={formatRupiah(totalBiaya)}>
-                        <CompositionBar
-                            items={expenseByCategory.map((e) => ({ label: e.category, amount: e.amount }))}
-                        />
-                    </Panel>
+                <div className="bg-muted/30 text-2xs text-muted-foreground rounded-md border border-dashed px-3 py-2">
+                    Biaya tunai sudah mengurangi buku kas. Penjualan tunai belum menulis ke buku yang sama (menyusul bersama Shift Kasir), jadi
+                    saldo kas belum bisa dihitung utuh di layar ini.
                 </div>
 
-                <SearchInput
-                    value={search}
-                    onChange={setSearch}
-                    placeholder="Cari keterangan atau kategori..."
-                    className="w-full sm:max-w-xs"
-                />
+                <div className="grid gap-3 sm:grid-cols-3">
+                    {kartu.map((k) => (
+                        <div key={k.label} className="bg-card rounded-lg border px-4 py-3">
+                            <p className="label-eyebrow">{k.label}</p>
+                            <p className="tabular mt-1 font-mono text-xl font-semibold">{k.value}</p>
+                        </div>
+                    ))}
+                </div>
 
-                <Panel title="Daftar Biaya" description={`${visible.length} catatan`} bodyClassName="p-0">
+                <Panel title="Daftar Biaya" description={`${expenses.total} biaya tercatat`} bodyClassName="p-0">
                     <div className="overflow-x-auto">
                         <Table>
                             <TableHeader>
-                                <TableRow className="hover:bg-transparent">
-                                    <TableHead className="label-eyebrow">Nomor</TableHead>
-                                    <TableHead className="label-eyebrow">Tanggal</TableHead>
-                                    <TableHead className="label-eyebrow">Kategori</TableHead>
-                                    <TableHead className="label-eyebrow">Keterangan</TableHead>
-                                    <TableHead className="label-eyebrow">Bayar</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Jumlah</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Status</TableHead>
+                                <TableRow>
+                                    <TableHead className="w-44">Nomor</TableHead>
+                                    <TableHead className="w-24">Tanggal</TableHead>
+                                    <TableHead>Kategori</TableHead>
+                                    <TableHead>Keterangan</TableHead>
+                                    <TableHead className="w-24">Metode</TableHead>
+                                    <TableHead className="w-28 text-right">Nilai</TableHead>
+                                    <TableHead className="w-24">Status</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {visible.length === 0 && (
-                                    <EmptyRow colSpan={7} icon={<Wallet />} message="Tidak ada biaya yang cocok." />
-                                )}
-                                {pagination.paged.map((e) => (
-                                    <TableRow key={e.id}>
-                                        <TableCell className="font-mono text-xs">{e.number}</TableCell>
-                                        <TableCell className="whitespace-nowrap">{formatDate(e.date)}</TableCell>
+                                {expenses.data.length === 0 && <EmptyRow colSpan={7} icon={<Wallet />} message="Belum ada biaya tercatat." />}
+
+                                {expenses.data.map((e) => (
+                                    <TableRow
+                                        key={e.id}
+                                        onClick={() => setDetail(e)}
+                                        className={cn('cursor-pointer', e.status === 'VOID' && 'text-muted-foreground')}
+                                    >
+                                        <TableCell className="tabular font-mono text-xs font-semibold">{e.number}</TableCell>
+                                        <TableCell className="text-muted-foreground tabular text-xs">{formatDate(e.date)}</TableCell>
+                                        <TableCell className="text-xs">{e.category}</TableCell>
+                                        <TableCell className="max-w-64 truncate text-xs">{e.description}</TableCell>
+                                        <TableCell className="text-2xs">{LABEL_METODE[e.paymentType] ?? e.paymentType}</TableCell>
+                                        <TableCell className="tabular text-right font-mono text-xs">{formatRupiah(e.amount)}</TableCell>
                                         <TableCell>
-                                            <span className="rounded bg-muted px-1.5 py-0.5 text-2xs">{e.category}</span>
-                                        </TableCell>
-                                        <TableCell>{e.description}</TableCell>
-                                        <TableCell className="text-muted-foreground">
-                                            {PAYMENT_LABEL[e.payment]}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono font-medium">
-                                            {formatRupiah(e.amount)}
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <StatusBadge status={e.status} />
+                                            {e.status === 'VOID' ? <Chip tone="warning">Dibatalkan</Chip> : <Chip tone="accent">Diposting</Chip>}
                                         </TableCell>
                                     </TableRow>
                                 ))}
                             </TableBody>
                         </Table>
                     </div>
-                    <TablePagination {...pagination} />
+                    <ServerPagination page={expenses} />
                 </Panel>
             </div>
+
+            {/* ===================================================== dialog biaya baru */}
+            <Dialog open={dialogTerbuka} onOpenChange={setDialogTerbuka}>
+                <DialogContent className="sm:max-w-md">
+                    <DialogHeader>
+                        <DialogTitle>Biaya baru</DialogTitle>
+                        <DialogDescription className="text-2xs">Langsung tercatat dan terposting — bukan draf.</DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-3">
+                        <Field label="Kategori" required error={form.errors.expense_category_id}>
+                            <NativeSelect
+                                value={form.data.expense_category_id}
+                                onChange={(v) => form.setData('expense_category_id', v)}
+                                placeholder="Pilih kategori"
+                                options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                            />
+                        </Field>
+
+                        <Field label="Keterangan" required error={form.errors.description}>
+                            <Input
+                                value={form.data.description}
+                                onChange={(e) => form.setData('description', e.target.value)}
+                                placeholder="Contoh: token listrik toko bulan ini"
+                                className="h-8"
+                            />
+                        </Field>
+
+                        <div className="grid grid-cols-2 gap-3">
+                            <Field label="Tanggal" required error={form.errors.transaction_date}>
+                                <Input
+                                    type="date"
+                                    value={form.data.transaction_date}
+                                    onChange={(e) => form.setData('transaction_date', e.target.value)}
+                                    className="h-8"
+                                />
+                            </Field>
+
+                            <Field label="Nilai" required error={form.errors.amount}>
+                                <Input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min={0}
+                                    value={form.data.amount}
+                                    onChange={(e) => form.setData('amount', e.target.value)}
+                                    className="h-8 text-right font-mono"
+                                />
+                            </Field>
+                        </div>
+
+                        <Field label="Metode bayar" required error={form.errors.payment_type}>
+                            <NativeSelect
+                                value={form.data.payment_type}
+                                onChange={(v) => form.setData('payment_type', v)}
+                                options={Object.entries(LABEL_METODE).map(([value, label]) => ({ value, label }))}
+                            />
+                        </Field>
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="ghost" size="sm" onClick={() => setDialogTerbuka(false)}>
+                            Batal
+                        </Button>
+                        <Button size="sm" onClick={simpan} disabled={form.processing}>
+                            {form.processing ? 'Menyimpan...' : 'Simpan biaya'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ======================================================== dialog detail */}
+            <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
+                <DialogContent className="sm:max-w-sm">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-2 text-base">
+                            <Wallet className="h-4 w-4" />
+                            {detail?.number}
+                            {detail?.status === 'VOID' && <Chip tone="warning">Dibatalkan</Chip>}
+                        </DialogTitle>
+                        <DialogDescription className="text-2xs">
+                            {detail && (
+                                <>
+                                    {formatDate(detail.date)} · {detail.category}
+                                </>
+                            )}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    {detail && (
+                        <div className="space-y-2 text-xs">
+                            <p>{detail.description}</p>
+                            <div className="flex justify-between border-t pt-2">
+                                <span className="text-muted-foreground">Metode</span>
+                                <span>{LABEL_METODE[detail.paymentType] ?? detail.paymentType}</span>
+                            </div>
+                            <div className="flex justify-between font-medium">
+                                <span>Nilai</span>
+                                <span className="tabular font-mono">{formatRupiah(detail.amount)}</span>
+                            </div>
+                            {detail.status === 'VOID' && detail.voidReason && (
+                                <p className="bg-warning/10 text-2xs rounded-md px-2.5 py-1.5">
+                                    <span className="font-medium">Alasan pembatalan:</span> {detail.voidReason}
+                                </p>
+                            )}
+                            {detail.author && <p className="text-muted-foreground text-2xs">oleh {detail.author}</p>}
+                        </div>
+                    )}
+
+                    <DialogFooter className="gap-2 sm:justify-between">
+                        <Button variant="ghost" size="sm" onClick={() => setDetail(null)}>
+                            Tutup
+                        </Button>
+                        {detail?.status === 'POSTED' && (
+                            <Button variant="destructive" size="sm" onClick={bukaBatal}>
+                                <Ban className="mr-1 h-3.5 w-3.5" /> Batalkan Biaya
+                            </Button>
+                        )}
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ========================================================== dialog batal */}
+            <Dialog open={batalTerbuka} onOpenChange={setBatalTerbuka}>
+                <DialogContent className="sm:max-w-sm">
+                    <DialogHeader>
+                        <DialogTitle className="text-base">Batalkan {detail?.number}?</DialogTitle>
+                        <DialogDescription className="text-2xs">
+                            Bila bermetode tunai, kasnya dikembalikan pada tanggal pembatalan ini. Biaya tetap tersimpan dan nomornya tidak dipakai
+                            ulang — pembatalan tidak dapat diurungkan.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-1.5">
+                        <label className="label-eyebrow" htmlFor="alasan-batal-biaya">
+                            Alasan pembatalan
+                        </label>
+                        <textarea
+                            id="alasan-batal-biaya"
+                            autoFocus
+                            rows={3}
+                            value={voidForm.data.void_reason}
+                            onChange={(e) => voidForm.setData('void_reason', e.target.value)}
+                            placeholder="Contoh: salah kategori, dicatat ulang dengan benar."
+                            className="border-input bg-background focus:ring-ring w-full rounded-md border px-2 py-1.5 text-sm shadow-xs focus:ring-2 focus:ring-offset-2 focus:outline-none"
+                        />
+                        {voidForm.errors.void_reason && <p className="text-2xs text-destructive font-medium">{voidForm.errors.void_reason}</p>}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="ghost" size="sm" onClick={() => setBatalTerbuka(false)}>
+                            Batal
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={batalkan} disabled={voidForm.processing}>
+                            {voidForm.processing ? 'Membatalkan...' : 'Ya, batalkan biaya'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </AppLayout>
     );
 }

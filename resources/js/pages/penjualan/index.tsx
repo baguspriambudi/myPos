@@ -1,32 +1,21 @@
-import { Head } from '@inertiajs/react';
-import { useMemo, useState } from 'react';
-import { Ban, Printer, Receipt } from 'lucide-react';
-import AppLayout from '@/layouts/app-layout';
+import { Chip, FlashMessage, ServerPagination, ServerSearch, type Paginated } from '@/components/master-ui';
+import { EmptyRow, PageHeader, Panel, formatDate, formatQty, formatRupiah } from '@/components/pos-ui';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import {
-    EmptyRow,
-    PageHeader,
-    Panel,
-    SearchInput,
-    StatusBadge,
-    TablePagination,
-    formatDate,
-    formatQty,
-    formatRupiah,
-    usePagination,
-} from '@/components/pos-ui';
-import { sales, type DocStatus, type Sale } from '@/data/dummy';
+import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
+import { Head, router, useForm, usePage } from '@inertiajs/react';
+import { Ban, Receipt } from 'lucide-react';
+import { useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [
-    { title: 'Transaksi', href: '#' },
-    { title: 'Penjualan', href: '/penjualan' },
+    { title: 'Penjualan', href: '#' },
+    { title: 'Nota Penjualan', href: '/penjualan' },
 ];
 
-const PAYMENT_LABEL: Record<string, string> = {
+const LABEL_METODE: Record<string, string> = {
     CASH: 'Tunai',
     QRIS: 'QRIS',
     DEBIT: 'Debit',
@@ -35,83 +24,115 @@ const PAYMENT_LABEL: Record<string, string> = {
     E_WALLET: 'E-Wallet',
 };
 
-const FILTERS: { key: DocStatus | 'ALL'; label: string }[] = [
+const SARINGAN: { key: string; label: string }[] = [
     { key: 'ALL', label: 'Semua' },
     { key: 'POSTED', label: 'Diposting' },
-    { key: 'DRAFT', label: 'Draft' },
     { key: 'VOID', label: 'Dibatalkan' },
 ];
 
+interface BarisNota {
+    name: string;
+    sku: string;
+    qty: number;
+    uom: string;
+    unitPrice: number;
+    lineTotal: number;
+    cogs: number;
+}
+
+interface Nota {
+    id: number;
+    number: string;
+    date: string;
+    customer: string | null;
+    cashier: string | null;
+    status: 'POSTED' | 'VOID' | 'DRAFT';
+    paymentType: string | null;
+    netTotal: number;
+    rounding: number;
+    paidTotal: number;
+    cogs: number;
+    voidReason: string | null;
+    items: BarisNota[];
+}
+
 export default function PenjualanIndex() {
-    const [search, setSearch] = useState('');
-    const [status, setStatus] = useState<DocStatus | 'ALL'>('ALL');
-    const [detail, setDetail] = useState<Sale | null>(null);
+    const { sales, filters, summary, canVoid, errors } = usePage().props as unknown as {
+        sales: Paginated<Nota>;
+        filters: { q: string; status: string };
+        summary: { count: number; net: number; cogs: number; rounding: number };
+        canVoid: boolean;
+        // Penolakan dari SaleVoider datang dengan kunci "sale" — di luar daftar
+        // field formulir, jadi dibaca dari props halaman.
+        errors: Record<string, string>;
+    };
 
-    const visible = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        return sales.filter((s) => {
-            const cocokStatus = status === 'ALL' || s.status === status;
-            const cocokCari =
-                !q || s.number.toLowerCase().includes(q) || (s.customer ?? '').toLowerCase().includes(q);
-            return cocokStatus && cocokCari;
+    const [detail, setDetail] = useState<Nota | null>(null);
+    const [batalTerbuka, setBatalTerbuka] = useState(false);
+
+    const form = useForm({ void_reason: '' });
+
+    function gantiStatus(status: string) {
+        router.get('/penjualan', { status, q: filters.q || undefined }, { preserveState: true, preserveScroll: true });
+    }
+
+    function bukaBatal() {
+        form.setData('void_reason', '');
+        form.clearErrors();
+        setBatalTerbuka(true);
+    }
+
+    function batalkan() {
+        if (!detail) return;
+        form.post(`/penjualan/${detail.id}/batal`, {
+            preserveScroll: true,
+            onSuccess: () => {
+                setBatalTerbuka(false);
+                setDetail(null);
+            },
         });
-    }, [search, status]);
+    }
 
-    const pagination = usePagination(visible, 10);
-
-    const posted = sales.filter((s) => s.status === 'POSTED');
-    const totalOmzet = posted.reduce((sum, s) => sum + s.netTotal, 0);
-    const totalCogs = posted.reduce((sum, s) => sum + s.cogs, 0);
-    const totalPembulatan = posted.reduce((sum, s) => sum + s.roundingAmount, 0);
+    const kartu = [
+        { label: 'Nota diposting', value: String(summary.count) },
+        { label: 'Nilai penjualan', value: formatRupiah(summary.net) },
+        { label: 'HPP', value: formatRupiah(summary.cogs) },
+        { label: 'Selisih pembulatan', value: formatRupiah(summary.rounding) },
+    ];
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
-            <Head title="Penjualan" />
+            <Head title="Nota Penjualan" />
 
             <div className="flex flex-col gap-4 p-4 md:p-5">
-                <PageHeader
-                    title="Penjualan"
-                    subtitle="Seluruh nota penjualan pada periode berjalan. Nota yang dibatalkan tetap tersimpan beserta nomornya."
-                />
+                <PageHeader title="Nota Penjualan" subtitle="Seluruh nota di lokasi aktif. Nota yang dibatalkan tetap tersimpan beserta nomornya." />
+
+                <FlashMessage />
 
                 <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                    <div className="rounded-lg border bg-card px-4 py-3">
-                        <p className="label-eyebrow">Nota diposting</p>
-                        <p className="mt-1 font-mono text-xl font-semibold tabular">{posted.length}</p>
-                    </div>
-                    <div className="rounded-lg border bg-card px-4 py-3">
-                        <p className="label-eyebrow">Nilai penjualan</p>
-                        <p className="mt-1 font-mono text-xl font-semibold tabular">{formatRupiah(totalOmzet)}</p>
-                    </div>
-                    <div className="rounded-lg border bg-card px-4 py-3">
-                        <p className="label-eyebrow">HPP</p>
-                        <p className="mt-1 font-mono text-xl font-semibold tabular">{formatRupiah(totalCogs)}</p>
-                    </div>
-                    <div className="rounded-lg border bg-card px-4 py-3">
-                        <p className="label-eyebrow">Selisih pembulatan</p>
-                        <p className="mt-1 font-mono text-xl font-semibold tabular">
-                            {formatRupiah(totalPembulatan)}
-                        </p>
-                    </div>
+                    {kartu.map((k) => (
+                        <div key={k.label} className="bg-card rounded-lg border px-4 py-3">
+                            <p className="label-eyebrow">{k.label}</p>
+                            <p className="tabular mt-1 font-mono text-xl font-semibold">{k.value}</p>
+                        </div>
+                    ))}
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                    <SearchInput
-                        value={search}
-                        onChange={setSearch}
+                    <ServerSearch
+                        routeUrl="/penjualan"
+                        initial={filters.q}
                         placeholder="Cari nomor nota atau pelanggan..."
                         className="w-full sm:max-w-xs"
                     />
                     <div className="flex flex-wrap gap-1">
-                        {FILTERS.map((f) => (
+                        {SARINGAN.map((f) => (
                             <button
                                 key={f.key}
-                                onClick={() => setStatus(f.key)}
+                                onClick={() => gantiStatus(f.key)}
                                 className={cn(
                                     'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                                    status === f.key
-                                        ? 'border-primary bg-primary text-primary-foreground'
-                                        : 'bg-card hover:bg-accent',
+                                    filters.status === f.key ? 'border-primary bg-primary text-primary-foreground' : 'bg-card hover:bg-accent',
                                 )}
                             >
                                 {f.label}
@@ -120,168 +141,166 @@ export default function PenjualanIndex() {
                     </div>
                 </div>
 
-                <Panel title="Daftar Nota" description={`${visible.length} nota ditampilkan`} bodyClassName="p-0">
+                <Panel title="Daftar Nota" description={`${sales.total} nota tercatat`} bodyClassName="p-0">
                     <div className="overflow-x-auto">
                         <Table>
                             <TableHeader>
-                                <TableRow className="hover:bg-transparent">
-                                    <TableHead className="label-eyebrow">Nomor</TableHead>
-                                    <TableHead className="label-eyebrow">Tanggal</TableHead>
-                                    <TableHead className="label-eyebrow">Pelanggan</TableHead>
-                                    <TableHead className="label-eyebrow">Bayar</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Item</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Diterima</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Status</TableHead>
+                                <TableRow>
+                                    <TableHead className="w-48">Nomor</TableHead>
+                                    <TableHead className="w-24">Tanggal</TableHead>
+                                    <TableHead>Pelanggan</TableHead>
+                                    <TableHead className="w-24">Bayar</TableHead>
+                                    <TableHead className="w-28 text-right">Nilai</TableHead>
+                                    <TableHead className="w-28 text-right">HPP</TableHead>
+                                    <TableHead className="w-24">Status</TableHead>
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {visible.length === 0 && (
-                                    <EmptyRow colSpan={7} icon={<Receipt />} message="Tidak ada nota yang cocok." />
-                                )}
-                                {pagination.paged.map((s) => (
+                                {sales.data.length === 0 && <EmptyRow colSpan={7} icon={<Receipt />} message="Belum ada nota penjualan." />}
+
+                                {sales.data.map((s) => (
                                     <TableRow
                                         key={s.id}
-                                        className={cn('cursor-pointer', s.status === 'VOID' && 'text-muted-foreground')}
                                         onClick={() => setDetail(s)}
+                                        className={cn('cursor-pointer', s.status === 'VOID' && 'text-muted-foreground')}
                                     >
-                                        <TableCell className="font-mono text-xs">{s.number}</TableCell>
-                                        <TableCell>
-                                            {formatDate(s.date)}{' '}
-                                            <span className="text-muted-foreground">{s.time}</span>
+                                        <TableCell className="tabular font-mono text-xs font-semibold">{s.number}</TableCell>
+                                        <TableCell className="text-muted-foreground tabular text-xs">{formatDate(s.date)}</TableCell>
+                                        <TableCell className="text-xs">
+                                            {s.customer ?? '—'}
+                                            {s.cashier && <span className="text-2xs text-muted-foreground block">kasir {s.cashier}</span>}
+                                        </TableCell>
+                                        <TableCell className="text-2xs">{LABEL_METODE[s.paymentType ?? ''] ?? '—'}</TableCell>
+                                        <TableCell className="tabular text-right font-mono text-xs">{formatRupiah(s.netTotal)}</TableCell>
+                                        <TableCell className="text-muted-foreground tabular text-right font-mono text-xs">
+                                            {formatRupiah(s.cogs)}
                                         </TableCell>
                                         <TableCell>
-                                            {s.customer ?? <span className="text-muted-foreground">Umum</span>}
-                                        </TableCell>
-                                        <TableCell className="text-muted-foreground">
-                                            {PAYMENT_LABEL[s.payment]}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono">{s.itemCount}</TableCell>
-                                        <TableCell
-                                            className={cn(
-                                                'text-right font-mono font-medium',
-                                                s.status === 'VOID' && 'line-through',
-                                            )}
-                                        >
-                                            {formatRupiah(s.paidTotal)}
-                                        </TableCell>
-                                        <TableCell className="text-right">
-                                            <StatusBadge status={s.status} />
+                                            {s.status === 'VOID' ? <Chip tone="warning">Dibatalkan</Chip> : <Chip tone="accent">Diposting</Chip>}
                                         </TableCell>
                                     </TableRow>
                                 ))}
                             </TableBody>
                         </Table>
                     </div>
-                    <TablePagination {...pagination} />
+                    <ServerPagination page={sales} />
                 </Panel>
             </div>
 
-            {/* ----------------------------------------------------- detail nota */}
+            {/* ==================================================== detail nota */}
             <Dialog open={!!detail} onOpenChange={(open) => !open && setDetail(null)}>
                 <DialogContent className="sm:max-w-lg">
                     <DialogHeader>
-                        <DialogTitle className="flex items-center gap-2">
-                            <span className="font-mono text-sm">{detail?.number}</span>
-                            {detail && <StatusBadge status={detail.status} />}
+                        <DialogTitle className="flex items-center gap-2 text-base">
+                            <Receipt className="h-4 w-4" />
+                            {detail?.number}
+                            {detail?.status === 'VOID' && <Chip tone="warning">Dibatalkan</Chip>}
                         </DialogTitle>
+                        <DialogDescription className="text-2xs">
+                            {detail && (
+                                <>
+                                    {formatDate(detail.date)} · {detail.customer ?? 'Tanpa pelanggan'} ·{' '}
+                                    {LABEL_METODE[detail.paymentType ?? ''] ?? '—'}
+                                </>
+                            )}
+                        </DialogDescription>
                     </DialogHeader>
 
                     {detail && (
-                        <div className="space-y-4">
-                            <dl className="grid grid-cols-3 gap-3 text-sm">
-                                <div>
-                                    <dt className="label-eyebrow">Tanggal</dt>
-                                    <dd>
-                                        {formatDate(detail.date)} {detail.time}
-                                    </dd>
-                                </div>
-                                <div>
-                                    <dt className="label-eyebrow">Kasir</dt>
-                                    <dd>{detail.cashier}</dd>
-                                </div>
-                                <div>
-                                    <dt className="label-eyebrow">Pembayaran</dt>
-                                    <dd>{PAYMENT_LABEL[detail.payment]}</dd>
-                                </div>
-                            </dl>
+                        <div className="space-y-3 text-xs">
+                            {detail.status === 'VOID' && detail.voidReason && (
+                                <p className="bg-warning/10 text-2xs rounded-md px-2.5 py-1.5">
+                                    <span className="font-medium">Alasan pembatalan:</span> {detail.voidReason}
+                                </p>
+                            )}
 
-                            <div className="overflow-hidden rounded-md border">
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow className="hover:bg-transparent">
-                                            <TableHead className="label-eyebrow">Produk</TableHead>
-                                            <TableHead className="label-eyebrow text-right">Qty</TableHead>
-                                            <TableHead className="label-eyebrow text-right">Harga</TableHead>
-                                            <TableHead className="label-eyebrow text-right">Jumlah</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {detail.items.map((it, i) => (
-                                            <TableRow key={i}>
-                                                <TableCell>{it.product}</TableCell>
-                                                <TableCell className="text-right font-mono">
-                                                    {formatQty(it.qty)}{' '}
-                                                    <span className="text-2xs text-muted-foreground">{it.uom}</span>
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono">
-                                                    {formatRupiah(it.price)}
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono">
-                                                    {formatRupiah(it.price * it.qty)}
-                                                </TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
+                            <ul className="divide-y border-y">
+                                {detail.items.map((l, i) => (
+                                    <li key={i} className="flex justify-between gap-2 py-1.5">
+                                        <span className="min-w-0">
+                                            <span className="block truncate">{l.name}</span>
+                                            <span className="text-2xs text-muted-foreground font-mono">
+                                                {formatQty(l.qty)} {l.uom} × {formatRupiah(l.unitPrice)} · HPP {formatRupiah(l.cogs)}
+                                            </span>
+                                        </span>
+                                        <span className="tabular shrink-0 font-mono">{formatRupiah(l.lineTotal)}</span>
+                                    </li>
+                                ))}
+                            </ul>
 
-                            {/* Ringkasan uang — pembulatan sengaja dipisah dari diskon */}
-                            <dl className="space-y-1.5 rounded-md bg-muted/60 px-3 py-2.5 text-sm">
+                            <dl className="space-y-1">
                                 <div className="flex justify-between">
-                                    <dt className="text-muted-foreground">Subtotal</dt>
-                                    <dd className="font-mono tabular">{formatRupiah(detail.grossTotal)}</dd>
-                                </div>
-                                {detail.discountTotal > 0 && (
-                                    <div className="flex justify-between">
-                                        <dt className="text-muted-foreground">Diskon</dt>
-                                        <dd className="font-mono tabular">-{formatRupiah(detail.discountTotal)}</dd>
-                                    </div>
-                                )}
-                                <div className="flex justify-between border-t pt-1.5">
                                     <dt className="text-muted-foreground">Nilai penjualan</dt>
-                                    <dd className="font-mono tabular">{formatRupiah(detail.netTotal)}</dd>
+                                    <dd className="tabular font-mono">{formatRupiah(detail.netTotal)}</dd>
                                 </div>
-                                {detail.roundingAmount !== 0 && (
+                                {detail.rounding !== 0 && (
                                     <div className="flex justify-between">
-                                        <dt className="text-muted-foreground">
-                                            Pembulatan
-                                            <span className="ml-1 text-2xs">(tidak mengurangi omzet)</span>
-                                        </dt>
-                                        <dd className="font-mono tabular">{formatRupiah(detail.roundingAmount)}</dd>
+                                        <dt className="text-muted-foreground">Pembulatan</dt>
+                                        <dd className="tabular font-mono">{formatRupiah(detail.rounding)}</dd>
                                     </div>
                                 )}
-                                <div className="flex justify-between border-t pt-1.5 text-base font-semibold">
-                                    <dt>Diterima</dt>
-                                    <dd className="font-mono tabular">{formatRupiah(detail.paidTotal)}</dd>
+                                <div className="flex justify-between border-t pt-1 font-medium">
+                                    <dt>Dibayar</dt>
+                                    <dd className="tabular font-mono">{formatRupiah(detail.paidTotal)}</dd>
                                 </div>
-                                <div className="flex justify-between text-xs text-muted-foreground">
-                                    <dt>HPP nota ini</dt>
-                                    <dd className="font-mono tabular">{formatRupiah(detail.cogs)}</dd>
+                                <div className="text-muted-foreground flex justify-between">
+                                    <dt>HPP nota</dt>
+                                    <dd className="tabular font-mono">{formatRupiah(detail.cogs)}</dd>
                                 </div>
                             </dl>
-
-                            <DialogFooter className="gap-2 sm:justify-between">
-                                <Button variant="outline" size="sm">
-                                    <Printer className="mr-1 h-3.5 w-3.5" /> Cetak Ulang
-                                </Button>
-                                {detail.status === 'POSTED' && (
-                                    <Button variant="destructive" size="sm">
-                                        <Ban className="mr-1 h-3.5 w-3.5" /> Batalkan Nota
-                                    </Button>
-                                )}
-                            </DialogFooter>
                         </div>
                     )}
+
+                    <DialogFooter className="gap-2 sm:justify-between">
+                        <Button variant="ghost" size="sm" onClick={() => setDetail(null)}>
+                            Tutup
+                        </Button>
+                        {canVoid && detail?.status === 'POSTED' && (
+                            <Button variant="destructive" size="sm" onClick={bukaBatal}>
+                                <Ban className="mr-1 h-3.5 w-3.5" /> Batalkan Nota
+                            </Button>
+                        )}
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ================================================== dialog batal */}
+            <Dialog open={batalTerbuka} onOpenChange={setBatalTerbuka}>
+                <DialogContent className="sm:max-w-sm">
+                    <DialogHeader>
+                        <DialogTitle className="text-base">Batalkan {detail?.number}?</DialogTitle>
+                        <DialogDescription className="text-2xs">
+                            Stok kembali ke lot asalnya dan pembayarannya ikut dibatalkan. Notanya tetap tersimpan dan nomornya tidak dipakai ulang —
+                            pembatalan tidak dapat diurungkan.
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="space-y-1.5">
+                        <label className="label-eyebrow" htmlFor="alasan-batal">
+                            Alasan pembatalan
+                        </label>
+                        <textarea
+                            id="alasan-batal"
+                            autoFocus
+                            rows={3}
+                            value={form.data.void_reason}
+                            onChange={(e) => form.setData('void_reason', e.target.value)}
+                            placeholder="Contoh: pelanggan membatalkan pembelian sebelum barang dibawa."
+                            className="border-input bg-background focus:ring-ring w-full rounded-md border px-2 py-1.5 text-sm shadow-xs focus:ring-2 focus:ring-offset-2 focus:outline-none"
+                        />
+                        {(form.errors.void_reason || errors?.sale) && (
+                            <p className="text-2xs text-destructive font-medium">{form.errors.void_reason ?? errors.sale}</p>
+                        )}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="ghost" size="sm" onClick={() => setBatalTerbuka(false)}>
+                            Batal
+                        </Button>
+                        <Button variant="destructive" size="sm" onClick={batalkan} disabled={form.processing}>
+                            {form.processing ? 'Membatalkan...' : 'Ya, batalkan nota'}
+                        </Button>
+                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </AppLayout>

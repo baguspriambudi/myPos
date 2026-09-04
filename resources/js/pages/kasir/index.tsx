@@ -1,137 +1,306 @@
-import { Head } from '@inertiajs/react';
-import { useMemo, useRef, useState } from 'react';
-import { Banknote, Minus, Plus, ScanLine, ShoppingCart, Trash2, TriangleAlert } from 'lucide-react';
-import AppLayout from '@/layouts/app-layout';
+import { formatQty, formatRupiah, hitungPembulatan } from '@/components/pos-ui';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { formatQty, formatRupiah, hitungPembulatan } from '@/components/pos-ui';
-import { branch, categories, products, productImage, type PaymentType, type Product } from '@/data/dummy';
+import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
+import { Head, router, useForm, usePage } from '@inertiajs/react';
+import { Banknote, CalendarOff, Minus, Plus, Printer, ScanLine, ShoppingCart, Trash2, TriangleAlert, Wallet } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [{ title: 'Kasir', href: '/kasir' }];
 
-const METODE: { key: PaymentType; label: string }[] = [
-    { key: 'CASH', label: 'Tunai' },
-    { key: 'QRIS', label: 'QRIS' },
-    { key: 'DEBIT', label: 'Debit' },
-    { key: 'TRANSFER', label: 'Transfer' },
-    { key: 'E_WALLET', label: 'E-Wallet' },
-];
+const NO_IMAGE = '/images/no-image.png';
 
-interface CartLine {
+const LABEL_METODE: Record<string, string> = {
+    CASH: 'Tunai',
+    QRIS: 'QRIS',
+    DEBIT: 'Debit',
+    CREDIT_CARD: 'Kartu Kredit',
+    TRANSFER: 'Transfer',
+    E_WALLET: 'E-Wallet',
+    CREDIT: 'Piutang (Kredit)',
+};
+
+interface Satuan {
+    id: number;
+    name: string;
+    factor: number;
+    /** null = satuan ini belum punya harga di daftar harga mana pun. */
+    price: number | null;
+}
+
+interface Produk {
+    id: number;
+    sku: string;
+    barcode: string | null;
+    name: string;
+    category: string | null;
+    isWeighted: boolean;
+    tracksStock: boolean;
+    baseUom: string | null;
+    stock: number;
+    uoms: Satuan[];
+}
+
+interface Pelanggan {
+    id: number;
+    name: string;
+    isMember: boolean;
+    isDefault: boolean;
+    creditLimit: number;
+    receivableOutstanding: number;
+}
+
+interface Nota {
+    number: string;
+    date: string;
+    customer: string | null;
+    paymentType: string | null;
+    netTotal: number;
+    rounding: number;
+    paidTotal: number;
+    receivableAmount: number | null;
+    cashReceived: number | null;
+    change: number | null;
+    lines: { name: string; qty: number; uom: string; unitPrice: number; lineTotal: number }[];
+}
+
+interface BarisKeranjang {
     key: string;
-    product: Product;
-    uomName: string;
+    product: Produk;
+    uom: Satuan;
     qty: number;
 }
 
+interface Shift {
+    id: number;
+    number: string;
+    openedAt: string;
+    openingCash: number;
+    openingSource: 'MANUAL' | 'ROLLOVER';
+}
+
+/** Satuan pertama yang sudah berharga; satuan tanpa harga tidak boleh dijual. */
+function satuanTerpakai(p: Produk): Satuan | undefined {
+    return p.uoms.find((u) => u.price !== null);
+}
+
+function uuidBaru(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+        return crypto.randomUUID();
+    }
+
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+    });
+}
+
 export default function KasirIndex() {
+    const page = usePage().props as unknown as {
+        products: Produk[];
+        categories: string[];
+        customers: Pelanggan[];
+        selectedCustomerId: number | null;
+        canSell: boolean;
+        periodProblem: string | null;
+        methods: string[];
+        creditMethod: string;
+        currentShift: Shift | null;
+        auth: { owner: { roundingUnit: number; roundingMode: 'NEAREST' | 'DOWN' | 'UP' } | null };
+        flash: { nota?: Nota | null };
+        errors: Record<string, string>;
+    };
+
+    const { products, categories, customers, selectedCustomerId, canSell, periodProblem, methods, creditMethod, currentShift, errors } = page;
+    const roundingUnit = page.auth.owner?.roundingUnit ?? 0;
+    const roundingMode = page.auth.owner?.roundingMode ?? 'NEAREST';
+
     const [search, setSearch] = useState('');
     const [category, setCategory] = useState<string | null>(null);
-    const [lines, setLines] = useState<CartLine[]>([]);
-    const [payment, setPayment] = useState<PaymentType>('CASH');
+    const [lines, setLines] = useState<BarisKeranjang[]>([]);
+    const [payment, setPayment] = useState<string>('CASH');
     const [payOpen, setPayOpen] = useState(false);
     const [cashReceived, setCashReceived] = useState('');
-    const [doneNumber, setDoneNumber] = useState<string | null>(null);
+    const [processing, setProcessing] = useState(false);
+    const [notaOpen, setNotaOpen] = useState(false);
+    const [shiftBukaOpen, setShiftBukaOpen] = useState(false);
+    const [shiftTutupOpen, setShiftTutupOpen] = useState(false);
     const searchRef = useRef<HTMLInputElement>(null);
+    // Kunci idempotensi: percobaan ulang karena jaringan lambat memakai nilai
+    // yang sama sehingga server mengembalikan nota yang sudah jadi, bukan
+    // menerbitkan nota kedua.
+    const uuidRef = useRef<string>(uuidBaru());
+
+    const nota = page.flash?.nota ?? null;
+    const nomorNota = nota?.number ?? null;
+
+    // Struk muncul sendiri begitu nota baru terbit; nomornya yang dipantau,
+    // bukan objeknya, supaya render ulang biasa tidak membuka dialog lagi.
+    useEffect(() => {
+        if (nomorNota) {
+            setNotaOpen(true);
+        }
+    }, [nomorNota]);
+
+    /* ---------------------------------------------------------- shift kasir */
+    // Bukan prasyarat berjualan — sekadar menaut nota yang terbit selama shift
+    // ini terbuka supaya bisa direkonsiliasi saat ditutup (lihat SalePoster).
+
+    const shiftBukaForm = useForm({ opening_cash: '' });
+    const shiftTutupForm = useForm({ actual_cash: '', close_note: '' });
+
+    function bukaDialogShift() {
+        shiftBukaForm.setData('opening_cash', '');
+        shiftBukaForm.clearErrors();
+        setShiftBukaOpen(true);
+    }
+
+    function simpanBukaShift() {
+        shiftBukaForm.post('/kasir/shift/buka', {
+            preserveScroll: true,
+            onSuccess: () => setShiftBukaOpen(false),
+        });
+    }
+
+    function bukaDialogTutupShift() {
+        shiftTutupForm.setData({ actual_cash: '', close_note: '' });
+        shiftTutupForm.clearErrors();
+        setShiftTutupOpen(true);
+    }
+
+    function simpanTutupShift() {
+        if (!currentShift) return;
+        shiftTutupForm.post(`/kasir/shift/${currentShift.id}/tutup`, {
+            preserveScroll: true,
+            onSuccess: () => setShiftTutupOpen(false),
+        });
+    }
 
     /* ------------------------------------------------------------ katalog */
 
     const katalog = useMemo(() => {
         const q = search.trim().toLowerCase();
         return products.filter((p) => {
-            if (!p.active) return false;
             if (category && p.category !== category) return false;
             if (!q) return true;
-            return (
-                p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || p.barcode.includes(q)
-            );
+            return p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q) || (p.barcode ?? '').includes(q);
         });
-    }, [search, category]);
+    }, [products, search, category]);
 
-    /* ------------------------------------------------------------ keranjang */
+    /* ---------------------------------------------------------- keranjang */
 
-    function tambah(product: Product, uomName?: string) {
-        const uom = uomName ?? product.uoms[0].name;
-        const key = `${product.id}-${uom}`;
+    function tambah(product: Produk, satuan?: Satuan) {
+        const uom = satuan ?? satuanTerpakai(product);
+        if (!uom) return;
+
+        const key = `${product.id}-${uom.id}`;
         setLines((prev) => {
             const ada = prev.find((l) => l.key === key);
             if (ada) {
-                return prev.map((l) => (l.key === key ? { ...l, qty: l.qty + 1 } : l));
+                return prev.map((l) => (l.key === key ? { ...l, qty: l.qty + (product.isWeighted ? 0.25 : 1) } : l));
             }
-            return [...prev, { key, product, uomName: uom, qty: 1 }];
+            return [...prev, { key, product, uom, qty: product.isWeighted ? 0.25 : 1 }];
         });
     }
 
     function ubahQty(key: string, qty: number) {
         setLines((prev) =>
-            prev.flatMap((l) => {
-                if (l.key !== key) return [l];
-                if (qty <= 0) return [];
-                const bulat = l.product.isWeighted ? Math.round(qty * 100) / 100 : Math.round(qty);
-                return [{ ...l, qty: bulat }];
-            }),
+            prev
+                .map((l) => {
+                    if (l.key !== key) return l;
+                    const bulat = l.product.isWeighted ? Math.round(qty * 100) / 100 : Math.round(qty);
+                    return { ...l, qty: bulat };
+                })
+                .filter((l) => l.qty > 0),
         );
     }
 
-    function gantiUom(key: string, uomName: string) {
+    function gantiUom(key: string, uom: Satuan) {
         setLines((prev) => {
             const line = prev.find((l) => l.key === key);
             if (!line) return prev;
-            const keyBaru = `${line.product.id}-${uomName}`;
+            const keyBaru = `${line.product.id}-${uom.id}`;
             const tanpaLama = prev.filter((l) => l.key !== key);
             const ada = tanpaLama.find((l) => l.key === keyBaru);
             if (ada) {
                 return tanpaLama.map((l) => (l.key === keyBaru ? { ...l, qty: l.qty + line.qty } : l));
             }
-            return prev.map((l) => (l.key === key ? { ...l, key: keyBaru, uomName } : l));
+            return [...tanpaLama, { ...line, key: keyBaru, uom }];
         });
     }
 
-    function hargaBaris(line: CartLine) {
-        const uom = line.product.uoms.find((u) => u.name === line.uomName)!;
-        return { uom, total: uom.price * line.qty, qtyBase: uom.factor * line.qty };
+    function hargaBaris(line: BarisKeranjang) {
+        const harga = line.uom.price ?? 0;
+        return { total: Math.round(harga * line.qty), qtyBase: line.qty * line.uom.factor };
     }
 
-    /* -------------------------------------------------------------- total */
+    /* --------------------------------------------------------------- uang */
 
     const netTotal = lines.reduce((sum, l) => sum + hargaBaris(l).total, 0);
-
-    // Pembulatan hanya berlaku untuk pembayaran tunai (Addendum §51.4)
-    const pembulatan =
-        payment === 'CASH' ? hitungPembulatan(netTotal, branch.roundingUnit, branch.roundingMode) : 0;
+    // Pembulatan hanya berlaku untuk pembayaran tunai (Addendum 51.4); nilai
+    // penjualan dan dasar pajaknya sendiri tidak ikut berubah.
+    const pembulatan = payment === 'CASH' ? hitungPembulatan(netTotal, roundingUnit, roundingMode) : 0;
     const dibayar = netTotal + pembulatan;
 
-    // Stok tidak boleh minus: qty base per produk dijumlah lintas satuan
     const kurangStok = useMemo(() => {
-        const perProduk = new Map<number, { product: Product; qtyBase: number }>();
+        const perProduk = new Map<number, { product: Produk; qtyBase: number }>();
         for (const l of lines) {
+            if (!l.product.tracksStock) continue;
             const { qtyBase } = hargaBaris(l);
             const acc = perProduk.get(l.product.id);
-            perProduk.set(l.product.id, {
-                product: l.product,
-                qtyBase: (acc?.qtyBase ?? 0) + qtyBase,
-            });
+            if (acc) acc.qtyBase += qtyBase;
+            else perProduk.set(l.product.id, { product: l.product, qtyBase });
         }
         return [...perProduk.values()].filter((x) => x.qtyBase > x.product.stock);
     }, [lines]);
 
     const uangDiterima = Number(cashReceived.replace(/\D/g, '')) || 0;
     const kembalian = uangDiterima - dibayar;
-    const bisaBayar = lines.length > 0 && kurangStok.length === 0;
-    const bisaSelesai = payment !== 'CASH' || uangDiterima >= dibayar;
+    const terkunci = !canSell || periodProblem !== null;
+    const bisaBayar = lines.length > 0 && kurangStok.length === 0 && !terkunci;
+
+    /* ------------------------------------------------------------- kredit */
+
+    const pelangganTerpilih = customers.find((c) => c.id === selectedCustomerId) ?? null;
+    const sisaLimitKredit = pelangganTerpilih ? pelangganTerpilih.creditLimit - pelangganTerpilih.receivableOutstanding : 0;
+    const bisaKredit = !!pelangganTerpilih && !pelangganTerpilih.isDefault && pelangganTerpilih.creditLimit > 0 && dibayar <= sisaLimitKredit;
+    const isKredit = payment === creditMethod;
+
+    const bisaSelesai = (payment !== 'CASH' || uangDiterima >= dibayar) && (!isKredit || bisaKredit) && !processing;
 
     function selesaikan() {
-        const urut = String(138 + Math.floor(Math.random() * 20)).padStart(6, '0');
-        setDoneNumber(`INV/${branch.code}/2026-08/${urut}`);
-        setLines([]);
-        setCashReceived('');
-        setPayOpen(false);
-        setSearch('');
-        searchRef.current?.focus();
-        window.setTimeout(() => setDoneNumber(null), 4000);
+        setProcessing(true);
+        router.post(
+            '/kasir/nota',
+            {
+                payment_type: payment,
+                customer_id: selectedCustomerId,
+                cash_received: payment === 'CASH' ? uangDiterima : null,
+                local_uuid: uuidRef.current,
+                lines: lines.map((l) => ({ product_id: l.product.id, uom_id: l.uom.id, qty: l.qty })),
+            },
+            {
+                preserveScroll: true,
+                onSuccess: () => {
+                    setLines([]);
+                    setCashReceived('');
+                    setPayOpen(false);
+                    setSearch('');
+                    uuidRef.current = uuidBaru();
+                    searchRef.current?.focus();
+                },
+                onFinish: () => setProcessing(false),
+            },
+        );
+    }
+
+    function gantiPelanggan(id: number) {
+        // Harga katalog ikut berubah mengikuti jenis pelanggan, jadi katalognya
+        // dimuat ulang — isi keranjang sengaja dipertahankan.
+        router.get('/kasir', { pelanggan: id }, { preserveState: true, preserveScroll: true, only: ['products', 'selectedCustomerId'] });
     }
 
     /** Enter pada kolom cari: bila cocok persis satu barcode, langsung masuk keranjang. */
@@ -146,6 +315,8 @@ export default function KasirIndex() {
         }
     }
 
+    const pesanGagal = Object.values(errors ?? {})[0];
+
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Kasir" />
@@ -153,9 +324,50 @@ export default function KasirIndex() {
             <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 md:p-5 lg:flex-row">
                 {/* =============================================== katalog produk */}
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+                    {terkunci && (
+                        <div className="text-2xs border-destructive/30 bg-destructive/10 text-destructive flex items-start gap-1.5 rounded-md border px-3 py-2">
+                            <CalendarOff className="mt-px h-3.5 w-3.5 shrink-0" />
+                            <span>{periodProblem ?? 'Lokasi aktif Anda bukan lokasi penjualan sehingga tidak dapat menerbitkan nota.'}</span>
+                        </div>
+                    )}
+
+                    {!terkunci && (
+                        <div className="text-2xs bg-muted/40 flex items-center justify-between gap-2 rounded-md border px-3 py-1.5">
+                            <span className="flex items-center gap-1.5">
+                                <Wallet className="text-muted-foreground h-3.5 w-3.5 shrink-0" />
+                                {currentShift ? (
+                                    <>
+                                        Shift <span className="font-mono font-medium">{currentShift.number}</span> terbuka sejak{' '}
+                                        {new Date(currentShift.openedAt).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })} ·
+                                        kas awal {formatRupiah(currentShift.openingCash)}
+                                    </>
+                                ) : (
+                                    <span className="text-muted-foreground">Belum ada shift terbuka — boleh tetap berjualan tanpa shift.</span>
+                                )}
+                            </span>
+                            {currentShift ? (
+                                <button
+                                    type="button"
+                                    onClick={bukaDialogTutupShift}
+                                    className="text-muted-foreground hover:text-foreground shrink-0 underline-offset-2 hover:underline"
+                                >
+                                    Tutup shift
+                                </button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    onClick={bukaDialogShift}
+                                    className="text-primary shrink-0 underline-offset-2 hover:underline"
+                                >
+                                    Buka shift
+                                </button>
+                            )}
+                        </div>
+                    )}
+
                     <div className="flex flex-wrap items-center gap-2">
                         <div className="relative min-w-56 flex-1">
-                            <ScanLine className="pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <ScanLine className="text-muted-foreground pointer-events-none absolute top-1/2 left-2.5 h-4 w-4 -translate-y-1/2" />
                             <Input
                                 ref={searchRef}
                                 autoFocus
@@ -171,9 +383,7 @@ export default function KasirIndex() {
                                 onClick={() => setCategory(null)}
                                 className={cn(
                                     'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                                    category === null
-                                        ? 'border-primary bg-primary text-primary-foreground'
-                                        : 'bg-card hover:bg-accent',
+                                    category === null ? 'border-primary bg-primary text-primary-foreground' : 'bg-card hover:bg-accent',
                                 )}
                             >
                                 Semua
@@ -184,9 +394,7 @@ export default function KasirIndex() {
                                     onClick={() => setCategory(c)}
                                     className={cn(
                                         'rounded-md border px-2.5 py-1 text-xs transition-colors',
-                                        category === c
-                                            ? 'border-primary bg-primary text-primary-foreground'
-                                            : 'bg-card hover:bg-accent',
+                                        category === c ? 'border-primary bg-primary text-primary-foreground' : 'bg-card hover:bg-accent',
                                     )}
                                 >
                                     {c}
@@ -197,57 +405,50 @@ export default function KasirIndex() {
 
                     <div className="min-h-0 flex-1 overflow-y-auto pr-1">
                         {katalog.length === 0 ? (
-                            <div className="flex h-40 flex-col items-center justify-center gap-2 text-muted-foreground">
+                            <div className="text-muted-foreground flex h-40 flex-col items-center justify-center gap-2">
                                 <ShoppingCart className="h-6 w-6 opacity-50" />
-                                <p className="text-sm">Produk tidak ditemukan.</p>
+                                <p className="text-sm">
+                                    {products.length === 0 ? 'Belum ada produk berharga yang dapat dijual.' : 'Produk tidak ditemukan.'}
+                                </p>
                             </div>
                         ) : (
                             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5">
                                 {katalog.map((p) => {
-                                    const habis = p.stock <= 0;
+                                    const utama = satuanTerpakai(p);
+                                    const habis = p.tracksStock && p.stock <= 0;
                                     return (
                                         <button
                                             key={p.id}
                                             onClick={() => tambah(p)}
-                                            disabled={habis}
+                                            disabled={habis || terkunci}
                                             className={cn(
-                                                'group flex flex-col overflow-hidden rounded-lg border bg-card text-left transition-all',
-                                                habis
+                                                'group bg-card flex flex-col overflow-hidden rounded-lg border text-left transition-all',
+                                                habis || terkunci
                                                     ? 'cursor-not-allowed opacity-50'
                                                     : 'hover:border-primary/50 hover:shadow-sm active:scale-[0.98]',
                                             )}
                                         >
-                                            <div className="relative aspect-square w-full overflow-hidden bg-muted">
+                                            <div className="bg-muted relative aspect-square w-full overflow-hidden">
                                                 <img
-                                                    src={productImage(p)}
-                                                    alt={p.name}
+                                                    src={NO_IMAGE}
+                                                    alt=""
                                                     loading="lazy"
-                                                    width={1254}
-                                                    height={1254}
-                                                    className={cn(
-                                                        'h-full w-full object-cover',
-                                                        // Placeholder terang menyilaukan di mode gelap
-                                                        !p.image && 'opacity-90 dark:opacity-25',
-                                                    )}
+                                                    className="h-full w-full object-cover opacity-90 dark:opacity-25"
                                                 />
-                                                {p.stock < p.minStock && !habis && (
-                                                    <span className="absolute top-1.5 right-1.5 rounded bg-warning px-1.5 py-0.5 text-2xs font-semibold text-warning-foreground">
-                                                        menipis
+                                                {!p.tracksStock && (
+                                                    <span className="text-2xs bg-primary/90 text-primary-foreground absolute top-1.5 right-1.5 rounded px-1.5 py-0.5 font-semibold">
+                                                        jasa
                                                     </span>
                                                 )}
                                             </div>
                                             <div className="flex flex-1 flex-col gap-0.5 p-2">
-                                                <p className="line-clamp-2 text-sm leading-tight font-medium">
-                                                    {p.name}
+                                                <p className="line-clamp-2 text-sm leading-tight font-medium">{p.name}</p>
+                                                <p className="text-primary mt-auto font-mono text-sm font-semibold">
+                                                    {formatRupiah(utama?.price ?? 0)}
+                                                    <span className="text-2xs text-muted-foreground ml-0.5 font-normal">/{utama?.name}</span>
                                                 </p>
-                                                <p className="mt-auto font-mono text-sm font-semibold text-primary">
-                                                    {formatRupiah(p.uoms[0].price)}
-                                                    <span className="ml-0.5 text-2xs font-normal text-muted-foreground">
-                                                        /{p.baseUom}
-                                                    </span>
-                                                </p>
-                                                <p className="font-mono text-2xs text-muted-foreground">
-                                                    stok {formatQty(p.stock)} {p.baseUom}
+                                                <p className="text-2xs text-muted-foreground font-mono">
+                                                    {p.tracksStock ? `stok ${formatQty(p.stock)} ${p.baseUom ?? ''}` : 'tanpa stok'}
                                                 </p>
                                             </div>
                                         </button>
@@ -259,77 +460,70 @@ export default function KasirIndex() {
                 </div>
 
                 {/* ==================================================== keranjang */}
-                <aside className="flex w-full shrink-0 flex-col rounded-lg border bg-card lg:w-88">
-                    <header className="flex shrink-0 items-center justify-between border-b px-3 py-2.5">
-                        <h2 className="flex items-center gap-1.5 text-lg font-semibold">
-                            <ShoppingCart className="h-4 w-4" />
-                            Keranjang
+                <aside className="bg-card flex w-full shrink-0 flex-col rounded-lg border lg:w-88">
+                    <header className="shrink-0 space-y-2 border-b px-3 py-2.5">
+                        <div className="flex items-center justify-between">
+                            <h2 className="flex items-center gap-1.5 text-lg font-semibold">
+                                <ShoppingCart className="h-4 w-4" />
+                                Keranjang
+                                {lines.length > 0 && (
+                                    <span className="bg-primary/10 text-primary text-2xs rounded px-1.5 py-0.5 font-mono">{lines.length}</span>
+                                )}
+                            </h2>
                             {lines.length > 0 && (
-                                <span className="rounded bg-primary/10 px-1.5 py-0.5 font-mono text-2xs text-primary">
-                                    {lines.length}
-                                </span>
+                                <Button variant="ghost" size="sm" className="text-muted-foreground h-7 text-xs" onClick={() => setLines([])}>
+                                    Kosongkan
+                                </Button>
                             )}
-                        </h2>
-                        {lines.length > 0 && (
-                            <Button
-                                variant="ghost"
-                                size="sm"
-                                className="h-7 text-xs text-muted-foreground"
-                                onClick={() => setLines([])}
-                            >
-                                Kosongkan
-                            </Button>
-                        )}
+                        </div>
+
+                        <select
+                            value={selectedCustomerId ?? ''}
+                            onChange={(e) => gantiPelanggan(Number(e.target.value))}
+                            className="border-input bg-background h-8 w-full rounded-md border px-2 text-xs"
+                            aria-label="Pelanggan"
+                        >
+                            {customers.map((c) => (
+                                <option key={c.id} value={c.id}>
+                                    {c.name}
+                                    {c.isMember ? ' · member' : ''}
+                                </option>
+                            ))}
+                        </select>
                     </header>
 
                     {/* baris keranjang */}
                     <div className="min-h-0 flex-1 overflow-y-auto">
                         {lines.length === 0 ? (
-                            <div className="flex h-full min-h-40 flex-col items-center justify-center gap-1.5 px-4 text-center text-muted-foreground">
-                                {doneNumber ? (
-                                    <>
-                                        <span className="flex h-9 w-9 items-center justify-center rounded-full bg-success/15 text-success">
-                                            <Banknote className="h-4 w-4" />
-                                        </span>
-                                        <p className="text-sm font-medium text-success">Transaksi tersimpan</p>
-                                        <p className="font-mono text-2xs">{doneNumber}</p>
-                                    </>
-                                ) : (
-                                    <>
-                                        <ShoppingCart className="h-6 w-6 opacity-40" />
-                                        <p className="text-sm">Belum ada item.</p>
-                                        <p className="text-2xs">Scan barcode atau pilih produk di sebelah kiri.</p>
-                                    </>
-                                )}
+                            <div className="text-muted-foreground flex h-full min-h-40 flex-col items-center justify-center gap-1.5 px-4 text-center">
+                                <ShoppingCart className="h-6 w-6 opacity-40" />
+                                <p className="text-sm">Belum ada item.</p>
+                                <p className="text-2xs">Scan barcode atau pilih produk di sebelah kiri.</p>
                             </div>
                         ) : (
                             <ul className="divide-y">
                                 {lines.map((l) => {
-                                    const { uom, total, qtyBase } = hargaBaris(l);
-                                    const lebih = qtyBase > l.product.stock;
+                                    const { total, qtyBase } = hargaBaris(l);
+                                    const lebih = l.product.tracksStock && qtyBase > l.product.stock;
+                                    const berharga = l.product.uoms.filter((u) => u.price !== null);
                                     return (
                                         <li key={l.key} className="px-3 py-2.5">
                                             <div className="flex items-start gap-2">
                                                 <img
-                                                    src={productImage(l.product)}
+                                                    src={NO_IMAGE}
                                                     alt=""
                                                     loading="lazy"
-                                                    className={cn(
-                                                        'h-9 w-9 shrink-0 rounded-md border object-cover',
-                                                        !l.product.image && 'opacity-90 dark:opacity-30',
-                                                    )}
+                                                    className="h-9 w-9 shrink-0 rounded-md border object-cover opacity-90 dark:opacity-30"
                                                 />
                                                 <div className="min-w-0 flex-1">
-                                                    <p className="truncate text-sm leading-tight font-medium">
-                                                        {l.product.name}
-                                                    </p>
-                                                    <p className="font-mono text-2xs text-muted-foreground">
-                                                        {formatRupiah(uom.price)} / {uom.name}
+                                                    <p className="truncate text-sm leading-tight font-medium">{l.product.name}</p>
+                                                    <p className="text-2xs text-muted-foreground font-mono">
+                                                        {formatRupiah(l.uom.price ?? 0)} / {l.uom.name}
                                                     </p>
                                                 </div>
                                                 <button
                                                     onClick={() => ubahQty(l.key, 0)}
-                                                    className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                                                    className="text-muted-foreground hover:bg-destructive/10 hover:text-destructive shrink-0 rounded p-1 transition-colors"
                                                     aria-label={`Hapus ${l.product.name}`}
                                                 >
                                                     <Trash2 className="h-3.5 w-3.5" />
@@ -337,16 +531,15 @@ export default function KasirIndex() {
                                             </div>
 
                                             <div className="mt-2 flex items-center gap-2">
-                                                {/* pemilih satuan */}
-                                                {l.product.uoms.length > 1 && (
+                                                {berharga.length > 1 && (
                                                     <div className="flex gap-0.5">
-                                                        {l.product.uoms.map((u) => (
+                                                        {berharga.map((u) => (
                                                             <button
-                                                                key={u.name}
-                                                                onClick={() => gantiUom(l.key, u.name)}
+                                                                key={u.id}
+                                                                onClick={() => gantiUom(l.key, u)}
                                                                 className={cn(
-                                                                    'rounded border px-1.5 py-0.5 font-mono text-2xs transition-colors',
-                                                                    u.name === l.uomName
+                                                                    'text-2xs rounded border px-1.5 py-0.5 font-mono transition-colors',
+                                                                    u.id === l.uom.id
                                                                         ? 'border-primary bg-primary text-primary-foreground'
                                                                         : 'hover:bg-accent',
                                                                 )}
@@ -359,10 +552,8 @@ export default function KasirIndex() {
 
                                                 <div className="ml-auto flex items-center gap-1">
                                                     <button
-                                                        onClick={() =>
-                                                            ubahQty(l.key, l.qty - (l.product.isWeighted ? 0.25 : 1))
-                                                        }
-                                                        className="flex h-6 w-6 items-center justify-center rounded border transition-colors hover:bg-accent"
+                                                        onClick={() => ubahQty(l.key, l.qty - (l.product.isWeighted ? 0.25 : 1))}
+                                                        className="hover:bg-accent flex h-6 w-6 items-center justify-center rounded border transition-colors"
                                                         aria-label="Kurangi"
                                                     >
                                                         <Minus className="h-3 w-3" />
@@ -373,14 +564,12 @@ export default function KasirIndex() {
                                                         type="number"
                                                         step={l.product.isWeighted ? 0.01 : 1}
                                                         min={0}
-                                                        className="h-6 w-14 rounded border bg-transparent px-1 text-center font-mono text-xs tabular-nums [appearance:textfield] focus:ring-1 focus:ring-ring focus:outline-none [&::-webkit-inner-spin-button]:appearance-none"
+                                                        className="focus:ring-ring h-6 w-14 [appearance:textfield] rounded border bg-transparent px-1 text-center font-mono text-xs tabular-nums focus:ring-1 focus:outline-none [&::-webkit-inner-spin-button]:appearance-none"
                                                         aria-label={`Jumlah ${l.product.name}`}
                                                     />
                                                     <button
-                                                        onClick={() =>
-                                                            ubahQty(l.key, l.qty + (l.product.isWeighted ? 0.25 : 1))
-                                                        }
-                                                        className="flex h-6 w-6 items-center justify-center rounded border transition-colors hover:bg-accent"
+                                                        onClick={() => ubahQty(l.key, l.qty + (l.product.isWeighted ? 0.25 : 1))}
+                                                        className="hover:bg-accent flex h-6 w-6 items-center justify-center rounded border transition-colors"
                                                         aria-label="Tambah"
                                                     >
                                                         <Plus className="h-3 w-3" />
@@ -393,10 +582,9 @@ export default function KasirIndex() {
                                             </div>
 
                                             {lebih && (
-                                                <p className="mt-1.5 flex items-center gap-1 text-2xs text-destructive">
+                                                <p className="text-2xs text-destructive mt-1.5 flex items-center gap-1">
                                                     <TriangleAlert className="h-3 w-3" />
-                                                    Melebihi stok — tersedia {formatQty(l.product.stock)}{' '}
-                                                    {l.product.baseUom}
+                                                    Melebihi stok — tersedia {formatQty(l.product.stock)} {l.product.baseUom}
                                                 </p>
                                             )}
                                         </li>
@@ -409,21 +597,42 @@ export default function KasirIndex() {
                     {/* metode bayar + total */}
                     <div className="shrink-0 space-y-2.5 border-t p-3">
                         <div className="flex flex-wrap gap-1">
-                            {METODE.map((m) => (
+                            {methods.map((m) => (
                                 <button
-                                    key={m.key}
-                                    onClick={() => setPayment(m.key)}
+                                    key={m}
+                                    onClick={() => setPayment(m)}
                                     className={cn(
                                         'flex-1 rounded-md border px-2 py-1 text-xs whitespace-nowrap transition-colors',
-                                        payment === m.key
-                                            ? 'border-primary bg-primary text-primary-foreground'
-                                            : 'hover:bg-accent',
+                                        payment === m ? 'border-primary bg-primary text-primary-foreground' : 'hover:bg-accent',
                                     )}
                                 >
-                                    {m.label}
+                                    {LABEL_METODE[m] ?? m}
                                 </button>
                             ))}
+                            <button
+                                key={creditMethod}
+                                disabled={!pelangganTerpilih || pelangganTerpilih.isDefault || pelangganTerpilih.creditLimit <= 0}
+                                onClick={() => setPayment(creditMethod)}
+                                title={
+                                    pelangganTerpilih && !pelangganTerpilih.isDefault && pelangganTerpilih.creditLimit > 0
+                                        ? `Sisa limit ${pelangganTerpilih.name}: ${formatRupiah(sisaLimitKredit)}`
+                                        : 'Pilih pelanggan berlimit piutang lebih dulu'
+                                }
+                                className={cn(
+                                    'flex-1 rounded-md border px-2 py-1 text-xs whitespace-nowrap transition-colors disabled:cursor-not-allowed disabled:opacity-40',
+                                    payment === creditMethod ? 'border-primary bg-primary text-primary-foreground' : 'hover:bg-accent',
+                                )}
+                            >
+                                Kredit
+                            </button>
                         </div>
+
+                        {isKredit && pelangganTerpilih && (
+                            <p className={cn('text-2xs rounded-md px-2 py-1', bisaKredit ? 'bg-muted text-muted-foreground' : 'bg-destructive/10 text-destructive')}>
+                                Sisa limit {pelangganTerpilih.name} setelah nota ini:{' '}
+                                {formatRupiah(bisaKredit ? sisaLimitKredit - dibayar : sisaLimitKredit)}
+                            </p>
+                        )}
 
                         <dl className="space-y-1 text-sm">
                             <div className="flex justify-between">
@@ -434,24 +643,28 @@ export default function KasirIndex() {
                                 <div className="flex justify-between">
                                     <dt className="text-muted-foreground">
                                         Pembulatan
-                                        <span className="ml-1 text-2xs">({branch.roundingUnit})</span>
+                                        <span className="text-2xs ml-1">({formatRupiah(roundingUnit)})</span>
                                     </dt>
                                     <dd className="font-mono tabular-nums">{formatRupiah(pembulatan)}</dd>
                                 </div>
                             )}
                             <div className="flex items-baseline justify-between border-t pt-1.5">
                                 <dt className="font-medium">Total bayar</dt>
-                                <dd className="font-mono text-2xl font-semibold tabular-nums">
-                                    {formatRupiah(dibayar)}
-                                </dd>
+                                <dd className="font-mono text-2xl font-semibold tabular-nums">{formatRupiah(dibayar)}</dd>
                             </div>
                         </dl>
 
                         {kurangStok.length > 0 && (
-                            <p className="flex items-start gap-1.5 rounded-md bg-destructive/10 px-2.5 py-1.5 text-2xs text-destructive">
+                            <p className="text-2xs text-destructive bg-destructive/10 flex items-start gap-1.5 rounded-md px-2.5 py-1.5">
                                 <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
-                                Stok tidak mencukupi untuk {kurangStok.length} produk. Toko ini tidak mengizinkan stok
-                                minus.
+                                Stok tidak mencukupi untuk {kurangStok.length} produk. Toko ini tidak mengizinkan stok minus.
+                            </p>
+                        )}
+
+                        {pesanGagal && (
+                            <p className="text-2xs text-destructive bg-destructive/10 flex items-start gap-1.5 rounded-md px-2.5 py-1.5">
+                                <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
+                                {pesanGagal}
                             </p>
                         )}
 
@@ -470,13 +683,12 @@ export default function KasirIndex() {
                     </DialogHeader>
 
                     <div className="space-y-4">
-                        <div className="rounded-lg bg-muted/60 px-3 py-2.5">
+                        <div className="bg-muted/60 rounded-lg px-3 py-2.5">
                             <p className="label-eyebrow">Total bayar</p>
                             <p className="font-mono text-3xl font-semibold tabular-nums">{formatRupiah(dibayar)}</p>
                             {pembulatan !== 0 && (
-                                <p className="mt-0.5 text-2xs text-muted-foreground">
-                                    Nilai penjualan {formatRupiah(netTotal)}, dibulatkan {formatRupiah(pembulatan)}.
-                                    Omzet dan pajak tidak berubah.
+                                <p className="text-2xs text-muted-foreground mt-0.5">
+                                    Nilai penjualan {formatRupiah(netTotal)}, dibulatkan {formatRupiah(pembulatan)}. Omzet dan pajak tidak berubah.
                                 </p>
                             )}
                         </div>
@@ -498,7 +710,7 @@ export default function KasirIndex() {
                                 <div className="flex flex-wrap gap-1">
                                     <button
                                         onClick={() => setCashReceived(String(dibayar))}
-                                        className="rounded-md border px-2 py-1 text-xs transition-colors hover:bg-accent"
+                                        className="hover:bg-accent rounded-md border px-2 py-1 text-xs transition-colors"
                                     >
                                         Uang pas
                                     </button>
@@ -508,7 +720,7 @@ export default function KasirIndex() {
                                             <button
                                                 key={n}
                                                 onClick={() => setCashReceived(String(n))}
-                                                className="rounded-md border px-2 py-1 font-mono text-xs transition-colors hover:bg-accent"
+                                                className="hover:bg-accent rounded-md border px-2 py-1 font-mono text-xs transition-colors"
                                             >
                                                 {formatRupiah(n)}
                                             </button>
@@ -516,7 +728,7 @@ export default function KasirIndex() {
                                 </div>
 
                                 <div className="flex items-baseline justify-between border-t pt-2">
-                                    <span className="text-sm text-muted-foreground">Kembalian</span>
+                                    <span className="text-muted-foreground text-sm">Kembalian</span>
                                     <span
                                         className={cn(
                                             'font-mono text-xl font-semibold tabular-nums',
@@ -526,16 +738,19 @@ export default function KasirIndex() {
                                         {formatRupiah(Math.max(kembalian, 0))}
                                     </span>
                                 </div>
-                                {kembalian < 0 && (
-                                    <p className="text-2xs text-destructive">
-                                        Kurang {formatRupiah(-kembalian)}.
-                                    </p>
-                                )}
+                                {kembalian < 0 && <p className="text-2xs text-destructive">Kurang {formatRupiah(-kembalian)}.</p>}
                             </div>
+                        ) : isKredit ? (
+                            <p className={cn('rounded-md px-3 py-2 text-xs', bisaKredit ? 'bg-muted text-muted-foreground' : 'bg-destructive/10 text-destructive')}>
+                                Tidak ada uang diterima — tercatat sebagai piutang atas nama{' '}
+                                <span className="font-medium">{pelangganTerpilih?.name}</span>.{' '}
+                                {bisaKredit
+                                    ? `Sisa limit setelahnya ${formatRupiah(sisaLimitKredit - dibayar)}.`
+                                    : 'Melebihi sisa limit piutangnya — pilih metode lain.'}
+                            </p>
                         ) : (
-                            <p className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">
-                                Pembayaran {METODE.find((m) => m.key === payment)?.label} dibayar persis sebesar nilai
-                                penjualan — tidak ada pembulatan.
+                            <p className="bg-muted text-muted-foreground rounded-md px-3 py-2 text-xs">
+                                Pembayaran {LABEL_METODE[payment] ?? payment} dibayar persis sebesar nilai penjualan — tidak ada pembulatan.
                             </p>
                         )}
                     </div>
@@ -545,7 +760,177 @@ export default function KasirIndex() {
                             Batal
                         </Button>
                         <Button size="sm" disabled={!bisaSelesai} onClick={selesaikan}>
-                            Selesai &amp; Cetak
+                            {processing ? 'Menyimpan...' : 'Selesai & Cetak'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ===================================================== struk nota */}
+            <Dialog open={notaOpen} onOpenChange={setNotaOpen}>
+                <DialogContent className="sm:max-w-xs">
+                    <DialogHeader>
+                        <DialogTitle className="flex items-center gap-1.5 text-base">
+                            <Printer className="h-4 w-4" /> Nota tersimpan
+                        </DialogTitle>
+                    </DialogHeader>
+
+                    {nota && (
+                        <div className="space-y-3 text-xs">
+                            <div>
+                                <p className="font-mono text-sm font-semibold">{nota.number}</p>
+                                <p className="text-2xs text-muted-foreground">
+                                    {nota.date} · {nota.customer ?? 'Tanpa pelanggan'} · {LABEL_METODE[nota.paymentType ?? ''] ?? '—'}
+                                </p>
+                            </div>
+
+                            <ul className="divide-y border-y">
+                                {nota.lines.map((l, i) => (
+                                    <li key={i} className="flex justify-between gap-2 py-1.5">
+                                        <span className="min-w-0">
+                                            <span className="block truncate">{l.name}</span>
+                                            <span className="text-2xs text-muted-foreground font-mono">
+                                                {formatQty(l.qty)} {l.uom} × {formatRupiah(l.unitPrice)}
+                                            </span>
+                                        </span>
+                                        <span className="shrink-0 font-mono tabular-nums">{formatRupiah(l.lineTotal)}</span>
+                                    </li>
+                                ))}
+                            </ul>
+
+                            <dl className="space-y-1">
+                                <div className="flex justify-between">
+                                    <dt className="text-muted-foreground">Nilai penjualan</dt>
+                                    <dd className="font-mono tabular-nums">{formatRupiah(nota.netTotal)}</dd>
+                                </div>
+                                {nota.rounding !== 0 && (
+                                    <div className="flex justify-between">
+                                        <dt className="text-muted-foreground">Pembulatan</dt>
+                                        <dd className="font-mono tabular-nums">{formatRupiah(nota.rounding)}</dd>
+                                    </div>
+                                )}
+                                <div className="flex justify-between border-t pt-1 font-medium">
+                                    <dt>Dibayar</dt>
+                                    <dd className="font-mono tabular-nums">{formatRupiah(nota.paidTotal)}</dd>
+                                </div>
+                                {nota.receivableAmount !== null && (
+                                    <div className="text-destructive flex justify-between font-medium">
+                                        <dt>Piutang (belum dibayar)</dt>
+                                        <dd className="font-mono tabular-nums">{formatRupiah(nota.receivableAmount)}</dd>
+                                    </div>
+                                )}
+                                {nota.cashReceived !== null && (
+                                    <>
+                                        <div className="flex justify-between">
+                                            <dt className="text-muted-foreground">Uang diterima</dt>
+                                            <dd className="font-mono tabular-nums">{formatRupiah(nota.cashReceived)}</dd>
+                                        </div>
+                                        <div className="text-success flex justify-between font-medium">
+                                            <dt>Kembalian</dt>
+                                            <dd className="font-mono tabular-nums">{formatRupiah(nota.change ?? 0)}</dd>
+                                        </div>
+                                    </>
+                                )}
+                            </dl>
+                        </div>
+                    )}
+
+                    <DialogFooter>
+                        <Button size="sm" onClick={() => setNotaOpen(false)}>
+                            Tutup
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ==================================================== dialog buka shift */}
+            <Dialog open={shiftBukaOpen} onOpenChange={setShiftBukaOpen}>
+                <DialogContent className="sm:max-w-xs">
+                    <DialogHeader>
+                        <DialogTitle>Buka shift</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="space-y-1.5">
+                        <label className="text-muted-foreground text-2xs" htmlFor="kas-awal">
+                            Kas awal di laci
+                        </label>
+                        <Input
+                            id="kas-awal"
+                            type="number"
+                            inputMode="numeric"
+                            min={0}
+                            autoFocus
+                            value={shiftBukaForm.data.opening_cash}
+                            onChange={(e) => shiftBukaForm.setData('opening_cash', e.target.value)}
+                            placeholder="Kosongkan untuk memakai kas akhir shift sebelumnya"
+                            className="h-9 text-right font-mono"
+                        />
+                        {shiftBukaForm.errors.opening_cash && (
+                            <p className="text-destructive text-2xs font-medium">{shiftBukaForm.errors.opening_cash}</p>
+                        )}
+                        {errors?.shift && <p className="text-destructive text-2xs font-medium">{errors.shift}</p>}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="ghost" size="sm" onClick={() => setShiftBukaOpen(false)}>
+                            Batal
+                        </Button>
+                        <Button size="sm" onClick={simpanBukaShift} disabled={shiftBukaForm.processing}>
+                            {shiftBukaForm.processing ? 'Membuka...' : 'Buka shift'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
+
+            {/* ================================================== dialog tutup shift */}
+            <Dialog open={shiftTutupOpen} onOpenChange={setShiftTutupOpen}>
+                <DialogContent className="sm:max-w-xs">
+                    <DialogHeader>
+                        <DialogTitle>Tutup shift {currentShift?.number}</DialogTitle>
+                    </DialogHeader>
+
+                    <div className="space-y-3">
+                        <div className="space-y-1.5">
+                            <label className="text-muted-foreground text-2xs" htmlFor="kas-aktual">
+                                Hasil hitung kas fisik saat ini
+                            </label>
+                            <Input
+                                id="kas-aktual"
+                                type="number"
+                                inputMode="numeric"
+                                min={0}
+                                autoFocus
+                                value={shiftTutupForm.data.actual_cash}
+                                onChange={(e) => shiftTutupForm.setData('actual_cash', e.target.value)}
+                                className="h-9 text-right font-mono"
+                            />
+                            {shiftTutupForm.errors.actual_cash && (
+                                <p className="text-destructive text-2xs font-medium">{shiftTutupForm.errors.actual_cash}</p>
+                            )}
+                        </div>
+
+                        <div className="space-y-1.5">
+                            <label className="text-muted-foreground text-2xs" htmlFor="catatan-tutup">
+                                Catatan (opsional)
+                            </label>
+                            <textarea
+                                id="catatan-tutup"
+                                rows={2}
+                                value={shiftTutupForm.data.close_note}
+                                onChange={(e) => shiftTutupForm.setData('close_note', e.target.value)}
+                                className="border-input bg-background focus:ring-ring w-full rounded-md border px-2 py-1.5 text-sm shadow-xs focus:ring-2 focus:ring-offset-2 focus:outline-none"
+                            />
+                        </div>
+
+                        {errors?.shift && <p className="text-destructive text-2xs font-medium">{errors.shift}</p>}
+                    </div>
+
+                    <DialogFooter>
+                        <Button variant="ghost" size="sm" onClick={() => setShiftTutupOpen(false)}>
+                            Batal
+                        </Button>
+                        <Button size="sm" onClick={simpanTutupShift} disabled={shiftTutupForm.processing}>
+                            {shiftTutupForm.processing ? 'Menutup...' : 'Tutup shift'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

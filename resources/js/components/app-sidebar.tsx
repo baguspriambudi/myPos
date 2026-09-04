@@ -1,73 +1,162 @@
-import { NavMain } from '@/components/nav-main';
+import { NavModules, type MenuEntry } from '@/components/nav-modules';
 import { NavUser } from '@/components/nav-user';
-import { useLayoutEffect } from 'react';
-import {
-    Sidebar,
-    SidebarContent,
-    SidebarFooter,
-    SidebarHeader,
-    SidebarMenu,
-    SidebarMenuButton,
-    SidebarMenuItem,
-} from '@/components/ui/sidebar';
-import { type NavItem } from '@/types';
+import { Sidebar, SidebarContent, SidebarFooter, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar';
 import { Link } from '@inertiajs/react';
 import {
+    ArrowRightLeft,
     BadgePercent,
     BookOpen,
     Boxes,
     Building2,
     CalendarRange,
+    ClipboardList,
     FileBarChart,
     FolderTree,
+    Coins,
+    HandCoins,
+    Landmark,
     LayoutGrid,
     Package,
+    PackagePlus,
     Percent,
     Receipt,
     ReceiptText,
+    Ruler,
+    Scale,
     ScanLine,
+    Settings,
+    ShoppingBag,
     ShoppingCart,
     Store,
     Tags,
     Truck,
+    Undo2,
     UserRound,
     Users,
     Wallet,
 } from 'lucide-react';
+import { useLayoutEffect } from 'react';
 import AppLogo from './app-logo';
 
-const transaksiNav: NavItem[] = [
+/**
+ * Menu disusun per MODUL, dan di dalam tiap modul dipisah menurut perannya:
+ * Transaksi (yang dikerjakan sehari-hari), Master (data acuannya), lalu
+ * Laporan. Susunan ini menjawab pertanyaan "ini urusan apa" lebih dulu,
+ * sebelum "layar mana" — daftar 13 master yang berderet rata tidak pernah
+ * menjawab pertanyaan pertama.
+ *
+ * Bagian yang belum ada layarnya sengaja tidak ditulis sebagai judul kosong;
+ * begitu layarnya jadi, ia tinggal disisipkan ke bagian yang sesuai.
+ */
+const menu: MenuEntry[] = [
     { title: 'Dashboard', url: '/dashboard', icon: LayoutGrid },
-    { title: 'Kasir', url: '/kasir', icon: ScanLine },
-    { title: 'Penjualan', url: '/penjualan', icon: ShoppingCart },
-    { title: 'Pembelian', url: '/pembelian', icon: ReceiptText },
-];
 
-const persediaanNav: NavItem[] = [
-    { title: 'Produk', url: '/produk', icon: Package },
-    { title: 'Kartu Stok', url: '/stok', icon: Boxes },
-];
+    {
+        title: 'Penjualan',
+        icon: ShoppingCart,
+        sections: [
+            {
+                label: 'Transaksi',
+                items: [
+                    { title: 'Kasir', url: '/kasir', icon: ScanLine },
+                    { title: 'Nota Penjualan', url: '/penjualan', icon: ReceiptText },
+                    { title: 'Retur Penjualan', url: '/retur/penjualan', icon: Undo2 },
+                ],
+            },
+            {
+                label: 'Master',
+                items: [
+                    { title: 'Pelanggan', url: '/master/pelanggan', icon: UserRound },
+                    { title: 'Daftar Harga', url: '/master/harga', icon: Tags },
+                    { title: 'Diskon', url: '/master/diskon', icon: BadgePercent },
+                ],
+            },
+        ],
+    },
 
-const keuanganNav: NavItem[] = [
-    { title: 'Kas & Biaya', url: '/biaya', icon: Wallet },
-    { title: 'Periode', url: '/periode', icon: CalendarRange },
+    {
+        title: 'Pembelian',
+        icon: ShoppingBag,
+        sections: [
+            {
+                label: 'Transaksi',
+                items: [
+                    { title: 'Penerimaan Barang', url: '/penerimaan', icon: PackagePlus },
+                    { title: 'Faktur Pemasok', url: '/pembelian', icon: ReceiptText },
+                    { title: 'Retur Pembelian', url: '/retur/pembelian', icon: Undo2 },
+                ],
+            },
+            {
+                label: 'Master',
+                items: [{ title: 'Pemasok', url: '/master/pemasok', icon: Truck }],
+            },
+        ],
+    },
+
+    {
+        title: 'Persediaan',
+        icon: Boxes,
+        sections: [
+            {
+                label: 'Transaksi',
+                items: [
+                    { title: 'Kartu Stok', url: '/stok', icon: Boxes },
+                    { title: 'Penyesuaian Stok', url: '/stok/penyesuaian', icon: Scale },
+                    { title: 'Transfer Antar-Lokasi', url: '/stok/transfer', icon: ArrowRightLeft },
+                    { title: 'Stock Opname', url: '/stok/opname', icon: ClipboardList },
+                ],
+            },
+            {
+                label: 'Master',
+                items: [
+                    { title: 'Produk', url: '/master/produk', icon: Package },
+                    { title: 'Kategori Produk', url: '/master/kategori', icon: FolderTree },
+                    { title: 'Satuan', url: '/master/satuan', icon: Ruler },
+                ],
+            },
+        ],
+    },
+
+    {
+        title: 'Banking',
+        icon: Landmark,
+        sections: [
+            {
+                label: 'Transaksi',
+                items: [
+                    { title: 'Kas & Biaya', url: '/biaya', icon: Wallet },
+                    { title: 'Utang Usaha', url: '/utang', icon: HandCoins },
+                    { title: 'Piutang Usaha', url: '/piutang', icon: Coins },
+                    { title: 'Periode Pembukuan', url: '/periode', icon: CalendarRange },
+                ],
+            },
+            {
+                label: 'Master',
+                items: [
+                    { title: 'Kategori Biaya', url: '/master/kategori-biaya', icon: Receipt },
+                    { title: 'Daftar Akun', url: '/master/akun', icon: BookOpen },
+                    { title: 'Pajak', url: '/master/pajak', icon: Percent },
+                ],
+            },
+        ],
+    },
+
     { title: 'Laporan', url: '/laporan', icon: FileBarChart },
-];
 
-// Master sudah memakai database; menu di atas masih memakai data contoh.
-const masterNav: NavItem[] = [
-    { title: 'Profil Usaha', url: '/master/usaha', icon: Building2 },
-    { title: 'Lokasi', url: '/master/lokasi', icon: Store },
-    { title: 'Pengguna', url: '/master/pengguna', icon: Users },
-    { title: 'Kategori Produk', url: '/master/kategori', icon: FolderTree },
-    { title: 'Produk & Satuan', url: '/master/produk', icon: Package },
-    { title: 'Daftar Harga', url: '/master/harga', icon: Tags },
-    { title: 'Pelanggan', url: '/master/pelanggan', icon: UserRound },
-    { title: 'Pemasok', url: '/master/pemasok', icon: Truck },
-    { title: 'Pajak', url: '/master/pajak', icon: Percent },
-    { title: 'Diskon', url: '/master/diskon', icon: BadgePercent },
-    { title: 'Kategori Biaya', url: '/master/kategori-biaya', icon: Receipt },
-    { title: 'Daftar Akun', url: '/master/akun', icon: BookOpen },
+    {
+        title: 'Pengaturan',
+        icon: Settings,
+        sections: [
+            {
+                label: 'Usaha',
+                items: [
+                    { title: 'Profil Usaha', url: '/master/usaha', icon: Building2 },
+                    { title: 'Lokasi', url: '/master/lokasi', icon: Store },
+                    { title: 'Pengguna', url: '/master/pengguna', icon: Users },
+                ],
+            },
+        ],
+    },
 ];
 
 // AppShell ikut remount tiap navigasi Inertia (layout tidak dipersistenkan),
@@ -108,10 +197,7 @@ export function AppSidebar() {
             </SidebarHeader>
 
             <SidebarContent>
-                <NavMain items={transaksiNav} label="Transaksi" />
-                <NavMain items={persediaanNav} label="Persediaan" />
-                <NavMain items={keuanganNav} label="Keuangan" />
-                <NavMain items={masterNav} label="Master" />
+                <NavModules entries={menu} />
             </SidebarContent>
 
             <SidebarFooter>

@@ -9,8 +9,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * Satuan produk. conversion_factor selalu relatif terhadap base unit:
  * DUS dengan factor 12 berarti 1 dus = 12 pcs.
  *
- * selling_price di sini adalah HARGA STANDAR — dipakai bila tidak ada baris
- * daftar harga yang cocok (Addendum 39.11 langkah 5).
+ * uom_name adalah salinan dari master satuan (Unit) yang ditunjuk unit_id;
+ * nama master dikunci begitu dipakai produk sehingga keduanya tidak bisa beda.
+ *
+ * Harga TIDAK disimpan di sini. Satu-satunya sumber harga jual adalah daftar
+ * harga (price_list_items), lihat PriceResolver.
  */
 class ProductUom extends Model
 {
@@ -26,11 +29,11 @@ class ProductUom extends Model
 
     protected $fillable = [
         'product_id',
+        'unit_id',
         'uom_name',
         'uom_type',
         'conversion_factor',
         'is_default',
-        'selling_price',
         'active',
     ];
 
@@ -38,7 +41,6 @@ class ProductUom extends Model
     {
         return [
             'conversion_factor' => 'decimal:6',
-            'selling_price' => 'decimal:2',
             'is_default' => 'boolean',
             'active' => 'boolean',
         ];
@@ -47,6 +49,12 @@ class ProductUom extends Model
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class, 'product_id');
+    }
+
+    /** Nama satuan berasal dari master ini; uom_name hanyalah salinannya. */
+    public function unit(): BelongsTo
+    {
+        return $this->belongsTo(Unit::class, 'unit_id');
     }
 
     public function isBase(): bool

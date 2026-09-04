@@ -9,7 +9,6 @@ use App\Models\Discount;
 use App\Models\ExpenseCategory;
 use App\Models\FiscalPeriod;
 use App\Models\Owner;
-use App\Models\PriceList;
 use App\Models\Product;
 use App\Models\Supplier;
 use App\Models\Tax;
@@ -26,15 +25,16 @@ class PartnerSeeder extends Seeder
         $ownerId = $owner->owner_id;
 
         $pusat = Branch::where('owner_id', $ownerId)->where('branch_code', 'BR01')->firstOrFail();
-        $grosir = PriceList::where('owner_id', $ownerId)->where('price_list_code', 'PL-GROSIR')->firstOrFail();
 
-        // Pelanggan grosir memakai daftar harga khusus — inilah yang membuat
-        // resolusi harga langkah 1 (Addendum 39.11) terpakai.
+        // "Umum / Tunai" adalah pelanggan tunai bawaan: seluruh penjualan eceran
+        // yang tidak menyebut pelanggan tercatat ke sana, jadi kasir tidak perlu
+        // memilih apa pun. Sisanya member, dan member otomatis memakai daftar
+        // harga bertanda member — tanpa penugasan satu per satu (Addendum 39.13).
         Customer::insert([
-            ['owner_id' => $ownerId, 'branch_id' => null, 'customer_name' => 'Umum / Tunai', 'phone' => null, 'credit_limit' => 0, 'price_list_id' => null, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
-            ['owner_id' => $ownerId, 'branch_id' => null, 'customer_name' => 'Toko Berkah Jaya', 'phone' => '081234567890', 'credit_limit' => 5000000, 'price_list_id' => $grosir->price_list_id, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
-            ['owner_id' => $ownerId, 'branch_id' => null, 'customer_name' => 'Warung Bu Aminah', 'phone' => '082345678901', 'credit_limit' => 1500000, 'price_list_id' => $grosir->price_list_id, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
-            ['owner_id' => $ownerId, 'branch_id' => $pusat->branch_id, 'customer_name' => 'Kantin SD Melati', 'phone' => '083456789012', 'credit_limit' => 500000, 'price_list_id' => null, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
+            ['owner_id' => $ownerId, 'branch_id' => null, 'customer_name' => 'Umum / Tunai', 'phone' => null, 'is_member' => false, 'is_default' => true, 'credit_limit' => 0, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
+            ['owner_id' => $ownerId, 'branch_id' => null, 'customer_name' => 'Toko Berkah Jaya', 'phone' => '081234567890', 'is_member' => true, 'is_default' => false, 'credit_limit' => 5000000, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
+            ['owner_id' => $ownerId, 'branch_id' => null, 'customer_name' => 'Warung Bu Aminah', 'phone' => '082345678901', 'is_member' => true, 'is_default' => false, 'credit_limit' => 1500000, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
+            ['owner_id' => $ownerId, 'branch_id' => $pusat->branch_id, 'customer_name' => 'Kantin SD Melati', 'phone' => '083456789012', 'is_member' => true, 'is_default' => false, 'credit_limit' => 500000, 'active' => true, 'created_at' => now(), 'updated_at' => now()],
         ]);
 
         Supplier::insert([

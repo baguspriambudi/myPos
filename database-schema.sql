@@ -107,11 +107,35 @@ CREATE TABLE product_categories (
     CONSTRAINT fk_categories_owner FOREIGN KEY (owner_id) REFERENCES owners (owner_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+-- Master satuan (Addendum 39.2). Hanya NAMA satuan; tipe BASE/PACK dan
+-- conversion_factor melekat pada produk karena isi satu DUS berbeda tiap produk.
+-- Nama yang sudah dipakai product_uoms tidak boleh diubah — nonaktifkan saja.
+CREATE TABLE units (
+    unit_id             BIGINT NOT NULL AUTO_INCREMENT,
+    owner_id            BIGINT NOT NULL,
+    unit_name           VARCHAR(50) NOT NULL, -- PCS / DUS / KG, huruf besar
+    description         VARCHAR(150) NULL,
+    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (unit_id),
+    UNIQUE KEY uk_units_name (owner_id, unit_name),
+    CONSTRAINT fk_units_owner FOREIGN KEY (owner_id) REFERENCES owners (owner_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 -- Product: stok & HPP selalu dalam base unit (Addendum 39)
 CREATE TABLE products (
     product_id          BIGINT NOT NULL AUTO_INCREMENT,
     owner_id            BIGINT NOT NULL,
     category_id         BIGINT NULL,
+    -- Jenis produk (Addendum 39.14). Dua akibat, keduanya DITURUNKAN dari sini
+    -- dan sengaja tidak disimpan sebagai kolom boolean tersendiri agar tidak
+    -- pernah berselisih dengan jenisnya:
+    --   boleh dijual  = TRADE, SERVICE          (aset & bahan produksi tidak)
+    --   punya stok    = semua KECUALI SERVICE   (jasa tidak berwujud)
+    -- PRODUCTION disediakan sebelum modul produksi ada, supaya barang yang
+    -- dipakai produksi sudah bisa dibedakan sejak awal.
+    product_type        ENUM('TRADE','SERVICE','ASSET','PRODUCTION') NOT NULL DEFAULT 'TRADE',
     product_name        VARCHAR(200) NOT NULL,
     sku                 VARCHAR(50) NOT NULL,
     barcode             VARCHAR(100) NULL, -- untuk scan POS retail
@@ -131,15 +155,16 @@ CREATE TABLE products (
 CREATE TABLE product_uoms (
     uom_id              BIGINT NOT NULL AUTO_INCREMENT,
     product_id          BIGINT NOT NULL,
-    uom_name            VARCHAR(50) NOT NULL,
+    unit_id             BIGINT NOT NULL, -- FK ke master units; nama satuan berasal dari sana
+    uom_name            VARCHAR(50) NOT NULL, -- salinan units.unit_name (nama master dikunci saat dipakai)
     uom_type            VARCHAR(10) NOT NULL,
     conversion_factor   DECIMAL(18,6) NOT NULL DEFAULT 1,
     is_default          BOOLEAN NOT NULL DEFAULT FALSE,
-    selling_price       DECIMAL(18,2) NOT NULL DEFAULT 0,
     active              BOOLEAN NOT NULL DEFAULT TRUE,
     PRIMARY KEY (uom_id),
     UNIQUE KEY uk_uoms_name (product_id, uom_name),
     CONSTRAINT fk_uoms_product FOREIGN KEY (product_id) REFERENCES products (product_id),
+    CONSTRAINT fk_uoms_unit FOREIGN KEY (unit_id) REFERENCES units (unit_id),
     -- Base UOM harus conversion_factor = 1
     CONSTRAINT chk_uoms_type CHECK (uom_type IN ('BASE', 'PACK')),
     CONSTRAINT chk_uoms_factor CHECK (conversion_factor > 0),
@@ -151,9 +176,10 @@ ALTER TABLE products
 
 -- ----------------------------------------------------------------------------
 -- DAFTAR HARGA JUAL (Addendum 39.10)
--- product_uoms.selling_price tetap menjadi harga standar/fallback. Tabel di
--- bawah adalah override bernama: berjangka waktu, boleh khusus satu lokasi,
--- dan BERTINGKAT lewat min_qty.
+-- SATU-SATUNYA sumber harga jual: master produk tidak menyimpan harga.
+-- Daftar harga bernama, berjangka waktu, boleh khusus satu lokasi penjualan,
+-- dan BERTINGKAT lewat min_qty. Produk yang tidak punya baris di sini tidak
+-- dapat dijual.
 --
 -- Contoh Rinso (base = pcs, pack DUS = 12 pcs):
 --   (DUS, min_qty 1)  -> 20.000   beli per dus
@@ -166,16 +192,22 @@ CREATE TABLE price_lists (
     branch_id           BIGINT NULL, -- NULL = berlaku seluruh lokasi milik owner
     price_list_code     VARCHAR(20) NOT NULL,
     price_list_name     VARCHAR(150) NOT NULL,
-    -- Dipakai bila tidak ada daftar harga lain yang cocok. Maksimal satu per
-    -- owner yang aktif; dijaga di service karena MySQL tidak punya partial unique.
+    -- HARGA NORMAL: dipakai bila tidak ada daftar harga lain yang cocok.
+    -- Maksimal satu per owner yang aktif; dijaga di service karena MySQL tidak
+    -- punya partial unique.
     is_default          BOOLEAN NOT NULL DEFAULT FALSE,
-    -- TRUE = hanya berlaku bagi pelanggan yang ditugaskan lewat
-    -- customers.price_list_id; dilewati resolusi umum. Tanpa penanda ini,
-    -- daftar "Harga Grosir" akan menang atas "Harga Umum" hanya karena
-    -- prioritasnya lebih tinggi, sehingga pembeli eceran ikut dapat harga
-    -- grosir (Addendum 39.11).
-    customer_only       BOOLEAN NOT NULL DEFAULT FALSE,
-    priority            INT NOT NULL DEFAULT 0, -- makin besar makin diutamakan
+    -- TRUE = hanya berlaku bagi pelanggan bertanda customers.is_member;
+    -- dilewati resolusi umum. Tanpa penanda ini, daftar "Harga Grosir" akan
+    -- menang atas harga normal hanya karena prioritasnya lebih tinggi,
+    -- sehingga pembeli eceran ikut dapat harga grosir (Addendum 39.11).
+    -- Tidak boleh TRUE bersamaan dengan is_default: harga normal dipakai semua
+    -- pembeli, jadi daftar yang memikul kedua tanda membuat pembeli tunai
+    -- kehilangan harga sama sekali. Dijaga di service, bukan CHECK.
+    member_only         BOOLEAN NOT NULL DEFAULT FALSE,
+    -- TIDAK DIPAKAI LAGI sejak Addendum 39.15: pemenang antar daftar sederajat
+    -- ditentukan price_list_items.start_date, bukan angka ini. Kolomnya
+    -- dipertahankan agar data lama tetap terbaca, dan sudah tidak ada di layar.
+    priority            INT NOT NULL DEFAULT 0,
     start_date          DATE NULL, -- NULL = tanpa batas awal
     end_date            DATE NULL, -- NULL = tanpa batas akhir
     active              BOOLEAN NOT NULL DEFAULT TRUE,
@@ -199,11 +231,29 @@ CREATE TABLE price_list_items (
     -- Tingkat kuantitas: harga berlaku bila qty >= min_qty. Baris dengan
     -- min_qty terbesar yang masih terpenuhi yang dipakai.
     min_qty             DECIMAL(18,4) NOT NULL DEFAULT 1,
+    -- Masa berlaku harga (Addendum 39.15). Harga TIDAK PERNAH ditimpa:
+    -- menggantinya berarti menambah baris baru dengan start_date lebih baru,
+    -- dan di antara baris yang mencakup tanggal transaksi, yang paling baru
+    -- mulai yang menang. start_date inilah pengganti price_lists.priority.
+    --
+    -- Baris lama sengaja dibiarkan utuh — dialah yang membuat penjualan
+    -- ber-backdate menemukan harga yang benar-benar berlaku saat itu, dan yang
+    -- mengembalikan harga normal begitu promo berjangka habis masanya.
+    --
+    -- 9999-12-31 dipakai sebagai ganti NULL supaya perbandingan tanggal cukup
+    -- satu BETWEEN dan tetap dapat memakai index.
+    start_date          DATE NOT NULL DEFAULT '1900-01-01',
+    end_date            DATE NOT NULL DEFAULT '9999-12-31',
     unit_price          DECIMAL(18,2) NOT NULL,
-    active              BOOLEAN NOT NULL DEFAULT TRUE,
+    -- Tidak ada kolom active: dengan rentang tanggal, "nonaktif" dan "sudah
+    -- lewat" adalah dua cara mengatakan hal yang sama dan pasti berselisih.
     PRIMARY KEY (price_list_item_id),
-    UNIQUE KEY uk_price_list_items (price_list_id, product_id, uom_id, min_qty),
+    -- Dua VERSI harga untuk tingkat yang sama boleh — itulah riwayatnya. Yang
+    -- dilarang adalah dua versi yang mulai pada tanggal yang sama, karena tidak
+    -- ada yang bisa menjelaskan mana yang dimaksud.
+    UNIQUE KEY uk_pli_versi (price_list_id, product_id, uom_id, min_qty, start_date),
     KEY idx_price_list_items_lookup (price_list_id, product_id, uom_id, min_qty),
+    KEY idx_pli_riwayat (product_id, uom_id, start_date),
     CONSTRAINT fk_pli_price_list FOREIGN KEY (price_list_id) REFERENCES price_lists (price_list_id) ON DELETE CASCADE,
     CONSTRAINT fk_pli_product FOREIGN KEY (product_id) REFERENCES products (product_id),
     CONSTRAINT fk_pli_uom FOREIGN KEY (uom_id) REFERENCES product_uoms (uom_id),
@@ -217,16 +267,22 @@ CREATE TABLE customers (
     branch_id           BIGINT NULL,
     customer_name       VARCHAR(150) NOT NULL,
     phone               VARCHAR(30),
+    -- TRUE = member terdaftar. Inilah SATU-SATUNYA yang menentukan harga:
+    -- member memakai daftar harga bertanda member_only, pelanggan tunai
+    -- memakai harga normal. Tidak ada penugasan daftar harga per pelanggan —
+    -- dua tempat yang harus cocok membuat member yang lupa ditugaskan diam-diam
+    -- membayar harga eceran (Addendum 39.11).
+    is_member           BOOLEAN NOT NULL DEFAULT FALSE,
+    -- Pelanggan tunai bawaan, tepat satu per owner: seluruh penjualan yang
+    -- tidak menyebut pelanggan tercatat ke sini sehingga kasir tidak perlu
+    -- memilih apa pun dan laporan per pelanggan tetap rapi (Addendum 39.13).
+    is_default          BOOLEAN NOT NULL DEFAULT FALSE,
     credit_limit        DECIMAL(18,2) NOT NULL DEFAULT 0, -- 0 = tunai saja / tanpa limit piutang
-    -- Daftar harga khusus pelanggan ini (Addendum 39.10). Menang atas daftar
-    -- harga lokasi. NULL = ikut resolusi normal.
-    price_list_id       BIGINT NULL,
     active              BOOLEAN NOT NULL DEFAULT TRUE,
     created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (customer_id),
     CONSTRAINT fk_customers_owner FOREIGN KEY (owner_id) REFERENCES owners (owner_id),
-    CONSTRAINT fk_customers_branch FOREIGN KEY (branch_id) REFERENCES branches (branch_id),
-    CONSTRAINT fk_customers_price_list FOREIGN KEY (price_list_id) REFERENCES price_lists (price_list_id)
+    CONSTRAINT fk_customers_branch FOREIGN KEY (branch_id) REFERENCES branches (branch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 CREATE TABLE suppliers (
@@ -501,7 +557,7 @@ CREATE TABLE sale_items (
     unit_price_base     DECIMAL(18,2) NOT NULL DEFAULT 0, -- per base unit
     -- Asal harga, referensi telusur saja (Addendum 39.10). Harga yang berlaku
     -- tetap angka di unit_price — mengubah master daftar harga tidak boleh
-    -- mengubah histori. NULL = harga standar product_uoms atau input manual.
+    -- mengubah histori. NULL = harga diinput manual di layar transaksi.
     price_list_id       BIGINT NULL,
     discount_id         BIGINT NULL, -- diskon level item (Addendum 61)
     discount_amount     DECIMAL(18,2) NOT NULL DEFAULT 0,
@@ -764,12 +820,16 @@ CREATE TABLE sales_return_items (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 3.6 PURCHASE RETURN
+-- Mengacu pada PENERIMAAN, bukan faktur — lot persediaan lahir dari
+-- penerimaan, bukan faktur (Addendum 58.6, 48.2). Diperbaiki 4 Sep 2026;
+-- semula keliru menunjuk purchases/purchase_items, peninggalan sebelum
+-- penerimaan dipisah dari faktur.
 CREATE TABLE purchase_returns (
     return_id           BIGINT NOT NULL AUTO_INCREMENT,
     return_number       VARCHAR(40) NOT NULL,
     fiscal_period_id    BIGINT NOT NULL,
     branch_id           BIGINT NOT NULL,
-    purchase_id         BIGINT NULL,
+    goods_receipt_id    BIGINT NULL,
     transaction_date    DATE NOT NULL,
     status              VARCHAR(10) NOT NULL DEFAULT 'DRAFT',
     refund_total        DECIMAL(18,2) NOT NULL DEFAULT 0,
@@ -782,7 +842,7 @@ CREATE TABLE purchase_returns (
     KEY idx_preturns_period_date (fiscal_period_id, transaction_date),
     CONSTRAINT fk_purchase_returns_period FOREIGN KEY (fiscal_period_id) REFERENCES fiscal_periods (fiscal_period_id),
     CONSTRAINT fk_purchase_returns_branch FOREIGN KEY (branch_id) REFERENCES branches (branch_id),
-    CONSTRAINT fk_purchase_returns_purchase FOREIGN KEY (purchase_id) REFERENCES purchases (purchase_id),
+    CONSTRAINT fk_purchase_returns_receipt FOREIGN KEY (goods_receipt_id) REFERENCES goods_receipts (goods_receipt_id),
     CONSTRAINT fk_purchase_returns_voided_by FOREIGN KEY (voided_by) REFERENCES users (user_id),
     CONSTRAINT fk_purchase_returns_created_by FOREIGN KEY (created_by) REFERENCES users (user_id),
     CONSTRAINT chk_purchase_returns_status CHECK (status IN ('DRAFT', 'POSTED', 'VOID'))
@@ -791,7 +851,7 @@ CREATE TABLE purchase_returns (
 CREATE TABLE purchase_return_items (
     return_item_id      BIGINT NOT NULL AUTO_INCREMENT,
     return_id           BIGINT NOT NULL,
-    purchase_item_id    BIGINT NULL,
+    receipt_item_id     BIGINT NULL,
     product_id          BIGINT NOT NULL,
     uom_id              BIGINT NOT NULL,
     qty                 DECIMAL(18,4) NOT NULL,
@@ -800,7 +860,7 @@ CREATE TABLE purchase_return_items (
     refund_amount       DECIMAL(18,2) NOT NULL DEFAULT 0,
     PRIMARY KEY (return_item_id),
     CONSTRAINT fk_pri_return FOREIGN KEY (return_id) REFERENCES purchase_returns (return_id),
-    CONSTRAINT fk_pri_purchase_item FOREIGN KEY (purchase_item_id) REFERENCES purchase_items (purchase_item_id),
+    CONSTRAINT fk_pri_receipt_item FOREIGN KEY (receipt_item_id) REFERENCES goods_receipt_items (receipt_item_id),
     CONSTRAINT fk_pri_product FOREIGN KEY (product_id) REFERENCES products (product_id),
     CONSTRAINT fk_pri_uom FOREIGN KEY (uom_id) REFERENCES product_uoms (uom_id),
     CONSTRAINT chk_pri_qty CHECK (qty > 0 AND qty_base > 0)
@@ -905,6 +965,14 @@ CREATE TABLE stock_lots (
     -- Lot lahir dari penerimaan, bukan faktur. Retur pembelian juga mengacu ke
     -- sini (Addendum 48.2 / 58.6). Menggantikan purchase_item_id sebelum Rev.4.
     receipt_item_id     BIGINT NULL,
+    -- Lot lahir dari retur penjualan (barang kembali dari pelanggan) menunjuk
+    -- baris retur itu sendiri, supaya void retur tahu lot persis mana yang
+    -- harus dikosongkan kembali (Addendum 48.2). Ditambah 4 Sep 2026.
+    return_item_id      BIGINT NULL,
+    -- Lot lahir di branch PENERIMA transfer menunjuk baris transfer itu
+    -- sendiri, pola sama seperti receipt_item_id/return_item_id (Addendum
+    -- 49.3, 49.4). Ditambah 4 Sep 2026.
+    transfer_item_id    BIGINT NULL,
     lot_number          VARCHAR(50) NOT NULL,
     received_date       DATE NOT NULL,
     qty_remaining       DECIMAL(18,4) NOT NULL DEFAULT 0, -- base unit, sisa belum terjual
@@ -917,6 +985,8 @@ CREATE TABLE stock_lots (
     CONSTRAINT fk_lots_product FOREIGN KEY (product_id) REFERENCES products (product_id),
     CONSTRAINT fk_lots_period FOREIGN KEY (fiscal_period_id) REFERENCES fiscal_periods (fiscal_period_id),
     CONSTRAINT fk_lots_receipt_item FOREIGN KEY (receipt_item_id) REFERENCES goods_receipt_items (receipt_item_id),
+    CONSTRAINT fk_lots_return_item FOREIGN KEY (return_item_id) REFERENCES sales_return_items (return_item_id),
+    CONSTRAINT fk_lots_transfer_item FOREIGN KEY (transfer_item_id) REFERENCES stock_transfer_items (transfer_item_id),
     CONSTRAINT chk_lots_status CHECK (status IN ('ACTIVE', 'EXHAUSTED'))
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
@@ -1029,11 +1099,17 @@ CREATE TABLE stock_adjustments (
     adjustment_number   VARCHAR(40) NOT NULL,
     fiscal_period_id    BIGINT NOT NULL,
     branch_id           BIGINT NOT NULL,
+    -- Period ditentukan TANGGAL ini, bukan created_at: barang yang baru
+    -- ketahuan hilang hari ini bisa saja hilangnya minggu lalu.
+    adjustment_date     DATE NOT NULL,
     product_id          BIGINT NOT NULL,
     uom_id              BIGINT NOT NULL,
     adjustment_type     VARCHAR(10) NOT NULL,
     qty                 DECIMAL(18,4) NOT NULL,
     qty_base            DECIMAL(18,4) NOT NULL,
+    -- Perolehan per satuan dasar; hanya dipakai penyesuaian MASUK. Yang keluar
+    -- memakai harga lot yang benar-benar terpakai.
+    unit_cost           DECIMAL(18,4) NOT NULL DEFAULT 0,
     reason              TEXT NOT NULL,
     status              VARCHAR(10) NOT NULL DEFAULT 'DRAFT',
     created_at          DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

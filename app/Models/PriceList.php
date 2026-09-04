@@ -10,8 +10,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /**
  * Daftar harga jual (Addendum 39.10).
  *
- * Lapisan override di atas ProductUom::selling_price. Boleh dibatasi ke satu
- * lokasi, diberi masa berlaku, dan diprioritaskan lewat kolom priority.
+ * Satu-satunya sumber harga jual. Boleh dibatasi ke satu lokasi, diberi masa
+ * berlaku, dan diprioritaskan lewat kolom priority. Produk yang tidak punya
+ * baris di daftar harga mana pun tidak dapat dijual (lihat PriceResolver).
  */
 class PriceList extends Model
 {
@@ -25,7 +26,7 @@ class PriceList extends Model
         'price_list_code',
         'price_list_name',
         'is_default',
-        'customer_only',
+        'member_only',
         'priority',
         'start_date',
         'end_date',
@@ -36,7 +37,7 @@ class PriceList extends Model
     {
         return [
             'is_default' => 'boolean',
-            'customer_only' => 'boolean',
+            'member_only' => 'boolean',
             'active' => 'boolean',
             'priority' => 'integer',
             'start_date' => 'date',

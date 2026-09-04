@@ -3,13 +3,17 @@
 namespace Tests\Feature;
 
 use App\Models\Branch;
+use App\Models\FiscalPeriod;
 use App\Models\Owner;
 use App\Models\PriceList;
+use App\Models\PriceListItem;
+use App\Models\Product;
 use App\Models\User;
 use Database\Seeders\CatalogSeeder;
 use Database\Seeders\OwnerSeeder;
 use Database\Seeders\PartnerSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Tests\TestCase;
 
 /**
@@ -135,9 +139,9 @@ class MasterAccessTest extends TestCase
     public function test_izin_menjual_tidak_dapat_dimatikan_saat_shift_terbuka(): void
     {
         $pusat = Branch::where('branch_code', 'BR01')->firstOrFail();
-        $periode = \App\Models\FiscalPeriod::where('branch_id', $pusat->branch_id)->firstOrFail();
+        $periode = FiscalPeriod::where('branch_id', $pusat->branch_id)->firstOrFail();
 
-        \Illuminate\Support\Facades\DB::table('cashier_shifts')->insert([
+        DB::table('cashier_shifts')->insert([
             'shift_number' => 'SH-001',
             'fiscal_period_id' => $periode->fiscal_period_id,
             'branch_id' => $pusat->branch_id,
@@ -189,7 +193,7 @@ class MasterAccessTest extends TestCase
             'price_list_name' => 'Daftar Bawaan Baru',
             'branch_id' => null,
             'is_default' => true,
-            'customer_only' => false,
+            'member_only' => false,
             'priority' => 0,
             'active' => true,
         ])->assertRedirect();
@@ -203,8 +207,8 @@ class MasterAccessTest extends TestCase
     public function test_tingkat_harga_menolak_satuan_milik_produk_lain(): void
     {
         $umum = PriceList::where('price_list_code', 'PL-UMUM')->firstOrFail();
-        $rinso = \App\Models\Product::where('sku', 'RNS-045')->firstOrFail();
-        $satuanAqua = \App\Models\Product::where('sku', 'AQU-600')->firstOrFail()->uoms()->first();
+        $rinso = Product::where('sku', 'RNS-045')->firstOrFail();
+        $satuanAqua = Product::where('sku', 'AQU-600')->firstOrFail()->uoms()->first();
 
         $this->actingAs($this->pemilik())
             ->post("/master/harga/{$umum->price_list_id}/tingkat", [
@@ -212,26 +216,42 @@ class MasterAccessTest extends TestCase
                 'uom_id' => $satuanAqua->uom_id,
                 'min_qty' => 1,
                 'unit_price' => 1000,
-                'active' => true,
+                'start_date' => now()->toDateString(),
+                'end_date' => PriceListItem::TANPA_AKHIR,
             ])
             ->assertSessionHasErrors('uom_id');
     }
 
-    public function test_tingkat_harga_menolak_duplikat(): void
+    /**
+     * Duplikat sekarang berarti tanggal mulai yang sama.
+     *
+     * Dua versi harga untuk tingkat yang sama memang boleh — itulah riwayatnya
+     * — tetapi dua versi yang mulai pada hari yang sama tidak dapat dijelaskan
+     * mana yang dimaksud.
+     */
+    public function test_tingkat_harga_menolak_dua_versi_yang_mulai_pada_hari_sama(): void
     {
         $umum = PriceList::where('price_list_code', 'PL-UMUM')->firstOrFail();
-        $rinso = \App\Models\Product::where('sku', 'RNS-045')->with('uoms')->firstOrFail();
+        $rinso = Product::where('sku', 'RNS-045')->with('uoms')->firstOrFail();
         $pcs = $rinso->uoms->firstWhere('uom_name', 'PCS');
 
-        // min_qty 1 pada PCS sudah dibuat seeder.
+        $baris = fn (float $harga) => [
+            'product_id' => $rinso->product_id,
+            'uom_id' => $pcs->uom_id,
+            'min_qty' => 1,
+            'unit_price' => $harga,
+            'start_date' => now()->toDateString(),
+            'end_date' => PriceListItem::TANPA_AKHIR,
+        ];
+
+        // Versi baru di atas harga seeder (yang mulai 1900) tetap diterima.
         $this->actingAs($this->pemilik())
-            ->post("/master/harga/{$umum->price_list_id}/tingkat", [
-                'product_id' => $rinso->product_id,
-                'uom_id' => $pcs->uom_id,
-                'min_qty' => 1,
-                'unit_price' => 9999,
-                'active' => true,
-            ])
+            ->post("/master/harga/{$umum->price_list_id}/tingkat", $baris(2400))
+            ->assertSessionHasNoErrors();
+
+        // Versi kedua pada hari yang sama ditolak.
+        $this->actingAs($this->pemilik())
+            ->post("/master/harga/{$umum->price_list_id}/tingkat", $baris(2350))
             ->assertSessionHasErrors('min_qty');
     }
 }

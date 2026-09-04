@@ -75,17 +75,37 @@ Contoh — Indomie:
 
 ### 39.2 Struktur Data
 
+Nama satuan tinggal di **master satuan** milik owner, bukan diketik ulang tiap produk. Tanpa master, satu usaha bisa punya "DUS", "DOS", dan "Dus" sekaligus sehingga laporan per satuan pecah.
+
+`units` (master satuan):
+
+| Field | Tipe | Keterangan |
+|---|---|---|
+| `unit_id` | BIGINT | PK |
+| `owner_id` | BIGINT | FK ke owners |
+| `unit_name` | VARCHAR(50) | PCS / DUS / KG, disimpan huruf besar, unik per owner |
+| `description` | VARCHAR(150) | keterangan bebas |
+| `active` | BOOLEAN | satuan nonaktif tidak lagi ditawarkan saat membuat produk |
+
+Aturan master satuan:
+
+- Master hanya menyimpan **nama**. `uom_type` dan `conversion_factor` tetap melekat pada produk — satu DUS Indomie 40 pcs, satu DUS Aqua 24 pcs.
+- `unit_name` **tidak dapat diubah** begitu satuan itu dipakai produk (`product_uoms.unit_id` menunjuknya): transaksi dan struk lama menyebut satuan itu dengan namanya. Untuk berhenti memakainya, nonaktifkan.
+- Satuan yang sudah dipakai produk tidak dapat dihapus.
+- Di layar produk, satuan **dipilih dari dropdown** master; tidak ada isian teks bebas.
+- `uom_type` tidak ditampilkan di layar. Pengguna menunjuk **satuan dasar** produk, lalu mendaftar **isi** tiap kemasan ("DUS isi 12 PCS"); `BASE`/`PACK` diisi sistem.
+
 `product_uoms`:
 
 | Field | Tipe | Keterangan |
 |---|---|---|
 | `uom_id` | BIGINT | PK |
 | `product_id` | BIGINT | FK ke products |
-| `uom_name` | VARCHAR(50) | pcs / dus / karton / kg |
+| `unit_id` | BIGINT | FK ke `units` — sumber nama satuan |
+| `uom_name` | VARCHAR(50) | salinan `units.unit_name` (pcs / dus / karton / kg) |
 | `uom_type` | VARCHAR(10) | `BASE` atau `PACK` |
 | `conversion_factor` | DECIMAL(18,6) | jumlah base unit dalam satuan ini |
 | `is_default` | BOOLEAN | UOM yang muncul lebih dulu di layar kasir |
-| `selling_price` | DECIMAL(18,2) | harga jual per UOM |
 | `active` | BOOLEAN | |
 
 Field pendukung di `products`:
@@ -166,13 +186,13 @@ Setiap baris transaksi menyimpan:
 
 Harga jual melekat pada **satuan**, bukan pada produk. Rinso satu dus dan Rinso satu pcs adalah dua harga yang berdiri sendiri, dan harga per dus hampir selalu lebih murah dibanding mengalikan harga ecer.
 
-`product_uoms.selling_price` tetap menjadi **harga standar** setiap satuan. Daftar harga adalah lapisan override di atasnya: bernama, berjangka waktu, boleh khusus satu lokasi atau satu pelanggan, dan **bertingkat menurut kuantitas**.
+Daftar harga adalah **satu-satunya sumber harga jual**: bernama, berjangka waktu, boleh khusus satu lokasi penjualan atau khusus member, dan **bertingkat menurut kuantitas**. Master produk tidak menyimpan harga sama sekali — dua tempat untuk satu angka hanya membingungkan, dan harga master yang lupa diisi diam-diam menjual barang seharga Rp0.
 
 **Struktur.**
 
 | Tabel | Isi |
 |---|---|
-| `price_lists` | Kepala daftar: kode, nama, lokasi (`branch_id` NULL = semua), masa berlaku, `priority`, `is_default`, `customer_only` |
+| `price_lists` | Kepala daftar: kode, nama, lokasi (`branch_id` NULL = semua), masa berlaku, `priority`, `is_default` (harga normal), `member_only` |
 | `price_list_items` | Baris harga: `product_id` + `uom_id` + `min_qty` → `unit_price` |
 
 Contoh Rinso, base `PCS`, pack `DUS` = 12 pcs:
@@ -185,28 +205,116 @@ Contoh Rinso, base `PCS`, pack `DUS` = 12 pcs:
 
 ### 39.11 Urutan Pemilihan Harga
 
-Diperiksa berurutan dan **berhenti pada yang pertama cocok**:
+Kandidat daftar harga disusun dari yang paling khusus ke yang paling umum, lalu **ditelusuri sampai ketemu baris harga** untuk produk + satuan + qty tersebut:
 
-1. Daftar harga milik pelanggan (`customers.price_list_id`), bila transaksi memakai pelanggan terdaftar.
-2. Daftar harga khusus lokasi (`branch_id` = lokasi transaksi) yang aktif dan mencakup `transaction_date`, `priority` tertinggi lebih dulu.
-3. Daftar harga owner (`branch_id` NULL) dengan syarat yang sama.
-4. Daftar harga bertanda `is_default`.
-5. `product_uoms.selling_price` untuk satuan tersebut.
+1. Daftar harga bertanda `member_only`, **hanya bila pelanggan transaksi itu member** (`customers.is_member`). Lokasi transaksi lebih dulu, lalu seluruh lokasi.
+2. Daftar harga khusus lokasi transaksi (`branch_id` = lokasi) yang aktif dan mencakup `transaction_date`. Hanya lokasi ber-`can_sell` yang boleh dipilih sebagai lokasi daftar harga — gudang tidak melayani penjualan.
+3. Daftar harga seluruh lokasi (`branch_id` NULL) dengan syarat yang sama.
+4. Daftar harga bertanda `is_default`, tanpa memandang masa berlaku — jaring terakhir.
+5. Tidak ketemu di mana pun → produk **belum boleh dijual** karena harganya belum diatur. Kasir wajib menolak baris itu dengan pesan yang jelas; tidak ada harga cadangan dan tidak boleh jatuh ke Rp0.
 
-**Langkah 2–4 hanya memandang daftar harga dengan `customer_only` = FALSE.** Daftar bertanda `customer_only` hanya dapat dijangkau lewat langkah 1. Tanpa penyaringan ini, sebuah daftar "Harga Grosir" berprioritas tinggi akan menang atas "Harga Umum" pada langkah 3, sehingga pembeli eceran ikut mendapat harga grosir — persis kesalahan yang tertangkap saat pengujian resolusi harga pertama kali dijalankan.
+**Yang menentukan harga adalah JENIS pelanggan, bukan penugasan per pelanggan.** Tidak ada kolom daftar harga di master pelanggan: cukup ditandai member, dan langkah 1 langsung berlaku. Sebelumnya tiap pelanggan ditunjuk ke satu daftar harga sendiri — dua tempat yang harus cocok, dan setiap member baru harus diingat untuk ditugaskan; yang lupa ditugaskan diam-diam membayar harga eceran.
 
-Di dalam daftar harga terpilih, baris diambil dengan `product_id` + `uom_id` yang sama persis dengan yang dipilih kasir, lalu **`min_qty` terbesar yang masih ≤ qty transaksi**. Bila produk tersebut tidak ada di daftar harga terpilih, sistem **tidak** melompat ke daftar harga berikutnya — langsung turun ke `product_uoms.selling_price`, supaya harga tidak diam-diam diambil dari daftar yang tidak diniatkan.
+**Langkah 2–4 hanya memandang daftar harga dengan `member_only` = FALSE.** Daftar bertanda `member_only` hanya dapat dijangkau lewat langkah 1. Tanpa penyaringan ini, sebuah daftar "Harga Grosir" berprioritas tinggi akan menang atas "Harga Umum" pada langkah 3, sehingga pembeli eceran ikut mendapat harga grosir — persis kesalahan yang tertangkap saat pengujian resolusi harga pertama kali dijalankan.
+
+**Member tetap turun ke langkah 2–4** untuk produk yang tidak ada di daftar member. Keanggotaan menambah harga khusus, bukan membuang harga biasa; kalau tidak, satu daftar member berisi 5 produk akan membuat 500 produk lain tidak bisa dijual kepada member.
+
+Kelima langkah itu adalah **kelompok**, bukan satu daftar per langkah: beberapa daftar sederajat (misalnya harga umum dan promo yang sama-sama berlaku seluruh lokasi) diadu di tingkat baris, bukan di tingkat daftar. Kekhususan kelompok selalu menang lebih dulu — harga member mengalahkan harga normal walau harga normalnya baru diubah kemarin.
+
+Di dalam setiap kelompok, baris diambil dengan `product_id` + `uom_id` yang sama persis dengan yang dipilih kasir, lalu **`min_qty` terbesar yang masih ≤ qty transaksi**, lalu **`start_date` paling baru** (Section 39.15). Bila kelompok itu tidak memuat produk tersebut, penelusuran **lanjut ke kelompok berikutnya**: daftar promo yang hanya berisi 5 produk tidak boleh membuat 500 produk lain kehilangan harga.
 
 ### 39.12 Aturan
 
+- Harga jual TIDAK disimpan di master produk. Satu-satunya tempatnya adalah `price_list_items`; master produk hanya menyimpan satuan dan konversinya.
 - Harga yang benar-benar dipakai **disimpan sebagai angka** di `sale_items.unit_price`. `price_list_id` hanya referensi telusur — mengubah atau menonaktifkan daftar harga tidak boleh mengubah histori transaksi. Prinsipnya sama dengan diskon (Section 61.2).
 - Tidak ada konversi harga otomatis antar satuan. Bila `DUS` tidak punya baris harga, sistem **tidak** menghitungnya dari harga pcs × 12 — satuan yang belum diberi harga tidak dapat dijual, dan kasir diberi pesan yang jelas.
 - Urutan hitung tidak berubah: harga dari daftar harga adalah `unit_price` pada Section 51.2 langkah 1, baru kemudian diskon, pajak, dan pembulatan.
 - `min_qty` dibandingkan terhadap qty **dalam satuan baris itu**, bukan qty base. Beli 6 pcs memenuhi `PCS min_qty 6`; beli 1 dus tidak.
 - Maksimal satu daftar harga `is_default` yang aktif per owner. Dijaga di service — MySQL tidak memiliki partial unique index.
+- `price_lists.priority` **tidak dipakai lagi** (Section 39.15). Kolomnya dipertahankan agar data lama tetap terbaca, tetapi sudah tidak ada di layar dan tidak memengaruhi pemilihan harga.
+- Satu daftar harga tidak boleh `member_only` dan `is_default` sekaligus. Harga normal adalah jaring terakhir untuk **semua** pembeli, sedangkan daftar `member_only` sengaja dilewati pembeli tunai — daftar yang memikul kedua tanda membuat pembeli tunai kehilangan harga sama sekali, dan produknya mendadak tidak bisa dijual tanpa ada yang tampak salah.
 - Daftar harga yang sudah dipakai transaksi tidak boleh dihapus, hanya dinonaktifkan. Barisnya boleh diubah dan berlaku untuk transaksi berikutnya saja.
 - Perubahan harga masuk audit log (Section 62), karena memengaruhi laba meskipun tidak memengaruhi HPP.
 - Daftar harga **tidak memengaruhi HPP**. COGS tetap dihitung dari cost persediaan.
+
+### 39.13 Pelanggan Tunai Bawaan & Member
+
+Kasir tidak boleh dipaksa memilih pelanggan untuk setiap penjualan eceran. Karena itu tiap usaha punya **tepat satu pelanggan tunai bawaan** (`customers.is_default`): seluruh penjualan yang tidak menyebut pelanggan tercatat ke sana, sehingga laporan per pelanggan tetap rapi tanpa baris tanpa nama.
+
+Yang benar-benar didaftarkan hanyalah **member** (`customers.is_member`) — pelanggan langganan, warung, kantin, dan sejenisnya.
+
+| Aturan | Alasan |
+|---|---|
+| Tepat satu pelanggan bawaan per usaha; menandai pelanggan lain memindahkannya | Selalu ada tujuan pencatatan penjualan eceran |
+| Pelanggan bawaan tidak dapat dihapus dan tidak dapat dinonaktifkan | Menghapusnya membuat penjualan eceran kehilangan tujuan |
+| Pelanggan bawaan tidak punya batas piutang, lokasi, maupun keanggotaan | Ia mewakili pembeli yang tidak disebut namanya |
+| Master pelanggan **tidak** punya kolom daftar harga | Harga ditentukan satu kondisi saja: member atau tidak. Dua tempat yang harus cocok membuat member yang lupa ditugaskan diam-diam membayar harga eceran |
+| Daftar harga `member_only` hanya dijangkau lewat member | Lihat Section 39.11 langkah 1 |
+
+Selama belum ada satu pun daftar bertanda `member_only`, member membayar sama dengan pelanggan tunai — keanggotaan tidak dengan sendirinya berarti diskon. Begitu daftar member dibuat, **seluruh** member langsung memakainya tanpa perlu disentuh satu per satu.
+
+### 39.14 Jenis Produk
+
+Tidak semua yang tercatat di master produk adalah barang dagang. Jasa tidak berwujud, aset dimiliki tetapi tidak dijual, dan bahan produksi menunggu modul yang belum dibuat. `products.product_type` membedakan keempatnya.
+
+| Jenis | `product_type` | Boleh dijual | Punya stok |
+|---|---|:---:|:---:|
+| Barang dagang | `TRADE` | ✅ | ✅ |
+| Jasa | `SERVICE` | ✅ | ❌ |
+| Aset / inventaris usaha | `ASSET` | ❌ | ✅ |
+| Produksi | `PRODUCTION` | ❌ | ✅ |
+
+**Kedua kolom akibat itu DITURUNKAN dari jenisnya, bukan disimpan sendiri.** `Product::canSell()` dan `Product::tracksStock()` menghitungnya setiap kali. Kalau "boleh dijual" jadi kolom boolean tersendiri, cepat atau lambat ada jasa bertanda tidak-bisa-dijual atau aset bertanda bisa-dijual, dan tidak ada yang tahu mana yang benar.
+
+**Jasa tidak punya pergerakan stok sama sekali.** Ia tidak menyentuh kartu stok, tidak punya lot, dan tidak menghasilkan HPP dari persediaan — tidak ada yang berkurang saat ia terjual. Karena itu jasa juga **tidak punya konversi satuan**: konversi menerjemahkan kemasan menjadi stok (1 DUS = 12 PCS), dan tanpa stok angka itu tidak menerjemahkan apa pun. Jasa cukup punya satu satuan, misalnya `KALI`, `JAM`, atau `RIT`.
+
+**Harga jasa tetap diatur di daftar harga**, sama seperti barang. Daftar harga adalah satu-satunya sumber harga jual apa pun jenis produknya (Section 39.10); yang tidak dimiliki jasa hanyalah stok.
+
+| Aturan | Alasan |
+|---|---|
+| Hanya `TRADE` dan `SERVICE` yang boleh masuk `price_list_items` | Aset dan bahan produksi memang tidak dijual. Disaring di dropdown **dan** di validasi, supaya permintaan yang dikirim langsung juga tertolak |
+| Produk yang masih punya baris harga tidak dapat dipindah ke jenis yang tidak dijual | Baris harganya akan menggantung, dan kasir tetap menemukan harga untuk barang yang seharusnya sudah tidak dijual |
+| Jasa tidak boleh punya satuan `PACK` | Tanpa stok, faktor konversi hanya jadi setelan yang diam-diam tidak berefek |
+| Produk lama tanpa jenis dianggap `TRADE` | Seluruh katalog yang sudah ada memang barang dagang; nilai kosong akan membuat mereka hilang dari daftar harga |
+
+`PRODUCTION` sengaja disediakan sekarang walaupun modul produksinya belum digarap dan belum boleh dijual. Barang yang dipakai untuk produksi harus sudah dapat dibedakan sejak awal — kalau tidak, seluruh katalog harus ditelusuri ulang saat modulnya dibuat.
+
+### 39.15 Masa Berlaku & Riwayat Harga
+
+**Harga tidak pernah ditimpa.** Mengganti harga berarti menambah baris baru di `price_list_items` dengan `start_date` lebih baru. Di antara baris yang masa berlakunya mencakup tanggal transaksi, **yang paling baru mulai berlaku yang menang**.
+
+| Kolom | Arti |
+|---|---|
+| `start_date` | Sejak kapan harga ini berlaku. Inilah pengganti `price_lists.priority` |
+| `end_date` | Sampai kapan. `9999-12-31` = seterusnya |
+
+```
+Rinso PCS  [1900-01-01 .. 9999-12-31]  2.500
+Rinso PCS  [2026-08-21 .. 9999-12-31]  2.300   <- menang sejak 21 Agu
+```
+
+Transaksi 5 Januari tetap menemukan 2.500 karena baris kedua belum mulai. **Baris lama tidak ditutup dan memang tidak boleh ditutup** — dialah yang membuat penjualan ber-backdate menemukan harga yang benar-benar berlaku saat itu.
+
+**Kenapa bukan "tutup baris lama H-1".** Menutup baris lama saat harga diganti terlihat lebih rapi, tetapi:
+
+- **Harga dua kali sehari menghasilkan rentang terbalik.** Baris yang dibuat pagi ini mulai hari ini; menutupnya H-1 memberinya `end_date` kemarin, yaitu lebih awal daripada `start_date`-nya sendiri.
+- **Promo berjangka tidak bisa kembali sendiri.** Bila harga normal ditutup permanen saat promo dibuat, ia mati selamanya. Dengan start_date, promo 1–20 Ramadan menang selama berlaku dan harga normal hidup lagi tanggal 21 tanpa diketik ulang.
+- **Ada operasi tulis yang bisa gagal separuh jalan** dan meninggalkan produk tanpa harga sama sekali.
+
+**Aturan.**
+
+| Aturan | Alasan |
+|---|---|
+| `start_date` paling awal adalah hari ini — harga tidak dapat dibuat berlaku mundur | Transaksi yang sudah tercetak akan punya harga lain saat ditelusuri |
+| Baris yang `start_date`-nya **sudah lewat** terkunci: tidak dapat diubah maupun dihapus | Itu riwayat, bukan setelan. Mengubah nilainya membuat penjualan ber-backdate memakai angka yang tidak pernah tercetak di struk mana pun |
+| Baris yang `start_date`-nya hari ini atau nanti **bebas diubah dan dihapus** | Belum pernah dipakai transaksi; salah ketik harus bisa langsung diperbaiki |
+| Dua versi dengan `start_date` sama untuk tingkat yang sama ditolak (`uk_pli_versi`) | Tidak ada yang bisa menjelaskan mana yang dimaksud. Mengganti harga dua kali sehari dilakukan dengan mengubah baris hari ini |
+| Penggantian versi dihitung per **produk + satuan + `min_qty`** | Rinso PCS punya tingkat min 1 dan min 6; mengganti harga tingkat min 1 tidak boleh mematikan tingkat min 6 |
+| Jaring terakhir `is_default` mengabaikan masa berlaku **daftar**, tetapi tetap menghormati masa berlaku **baris** | Harga yang sengaja dihentikan tidak boleh hidup lagi lewat pintu belakang |
+
+Layar Atur harga menampilkan **hanya yang berlaku hari ini** secara bawaan, dengan tombol Lihat riwayat. Baris tidak pernah benar-benar hilang, jadi tanpa saringan itu layarnya tidak terbaca lagi dalam setahun.
+
+**Harga baru berlaku hari ini, bukan besok.** Konsekuensinya penjualan yang sudah terjadi pagi tadi memakai harga lama sementara tanggal hari ini kini menunjuk harga baru. Struk dan laporan tetap benar karena harga di-snapshot ke `sale_items.unit_price` (Section 39.12); yang meleset hanya input ber-backdate ke hari ini juga.
 
 ---
 
@@ -1231,9 +1339,13 @@ Harga jual dan diskon memakai nilai yang tersimpan di payload (kondisi saat tran
 | Depo | Toko yang sekaligus menjadi titik distribusi ke lokasi lain; kemampuannya sama dengan toko |
 | Gudang | Lokasi yang hanya menyimpan dan memindahkan barang, tidak melayani penjualan (`can_sell` = FALSE) |
 | Utang Belum Ditagih | Akun penampung nilai barang yang sudah diterima tetapi fakturnya belum masuk (*Goods Received Not Invoiced*) |
-| Harga Standar | `product_uoms.selling_price` — harga jual bawaan tiap satuan, dipakai bila tidak ada daftar harga yang cocok |
-| Daftar Harga | Kumpulan harga jual bernama dan berjangka waktu yang menimpa harga standar (Section 39.10) |
+| Daftar Harga | Kumpulan harga jual bernama dan berjangka waktu; satu-satunya sumber harga jual (Section 39.10) |
+| Harga Normal | Daftar harga bertanda `is_default` — harga yang dipakai pembeli umum bila tidak ada daftar lain yang cocok |
+| Member | Pelanggan terdaftar (`customers.is_member`); otomatis memakai daftar harga bertanda `member_only`, tanpa penugasan per pelanggan (Section 39.13) |
+| Pelanggan Tunai Bawaan | Pelanggan `is_default` milik tiap usaha; tujuan seluruh penjualan yang tidak menyebut pelanggan |
 | Tingkat Harga | Baris daftar harga dengan `min_qty`; harga berubah begitu kuantitas mencapai ambang tersebut |
+| Jenis Produk | `products.product_type` — barang dagang, jasa, aset, atau produksi; menentukan boleh-dijual dan punya-stok (Section 39.14) |
+| Versi Harga | Satu baris `price_list_items` dengan masa berlakunya sendiri; harga diganti dengan menambah versi baru, bukan menimpa (Section 39.15) |
 
 ---
 
@@ -1243,6 +1355,10 @@ Harga jual dan diskon memakai nilai yang tersimpan di payload (kondisi saat tran
 |---|---|---|
 | 1.2 | Draft | PRD utama (`prd.md`, Section 1–37) |
 | 1.3 | Draft | Addendum (file ini) — Section 38–60: metode costing, konversi satuan (UOM), initial opening, void, koreksi, concurrency closing, recovery, reopen approval, selisih kas, transaksi lintas period, transfer antar-branch, permission matrix, rounding, penomoran, GL, multi-currency, stok negatif, acceptance criteria, NFR, glossary |
+| 1.3 Rev.10 | Draft — 21 Agu 2026 | **Section 39.15 baru — masa berlaku & riwayat harga.** `price_list_items` mendapat `start_date` + `end_date` (`9999-12-31` = seterusnya); kolom `active`-nya dibuang karena "nonaktif" dan "sudah lewat" pasti berselisih. Harga tidak pernah ditimpa: menggantinya menambah baris baru, dan yang paling baru mulai berlaku yang menang — **`start_date` menggantikan `price_lists.priority`**, yang kini tidak dipakai lagi dan ditutup dari layar. Aturan "tutup baris lama H-1" **tidak dipakai**: ia menghasilkan rentang terbalik bila harga diganti dua kali sehari dan membuat promo berjangka tidak bisa mengembalikan harga normal sendiri. Baris yang sudah mulai berlaku terkunci; yang mulai hari ini atau nanti bebas diubah. Unique key menjadi `uk_pli_versi` yang menyertakan `start_date`. Layar Atur harga bawaannya hanya menampilkan yang berlaku hari ini, plus tombol Lihat riwayat dan Ganti harga |
+| 1.3 Rev.9 | Draft — 21 Agu 2026 | **Section 39.14 baru — jenis produk.** `products.product_type` ENUM(`TRADE`,`SERVICE`,`ASSET`,`PRODUCTION`), bawaan `TRADE`. Boleh dijual = `TRADE`+`SERVICE`; punya stok = semua kecuali `SERVICE`. Keduanya diturunkan lewat `Product::canSell()`/`tracksStock()`, bukan kolom boolean tersendiri. Jasa tidak punya pergerakan stok dan karena itu tidak punya konversi satuan, tetapi harganya tetap diatur di daftar harga seperti barang. Aset dan bahan produksi tidak dapat masuk `price_list_items` — disaring di dropdown dan di validasi — dan produk yang masih punya baris harga tidak dapat dipindah ke jenis yang tidak dijual. `PRODUCTION` disediakan lebih dulu meski modul produksinya belum digarap |
+| 1.3 Rev.8 | Draft — 21 Agu 2026 | **Harga ditentukan jenis pelanggan, bukan penugasan per pelanggan.** Kolom `customers.price_list_id` dihapus: pelanggan bertanda `is_member` otomatis memakai daftar harga `member_only`, pelanggan tunai memakai harga normal. Sebelumnya dua tempat harus cocok, dan member baru yang lupa ditugaskan diam-diam membayar harga eceran. Urutan pemilihan harga (Section 39.11 langkah 1) menjadi "daftar `member_only`, hanya bila pelanggannya member" — lokasi transaksi lebih dulu, lalu seluruh lokasi — dan member tetap turun ke langkah 2–4 untuk produk yang tidak ada di daftar member, supaya keanggotaan tidak membuat barang lain kehilangan harga. Satu daftar harga tidak boleh `member_only` dan `is_default` sekaligus. Layar pelanggan kehilangan kolom dan pilihan daftar harga; chip pelanggan bawaan menjadi "Tunai" |
+| 1.3 Rev.7 | Draft — 21 Agu 2026 | **Master satuan** (`units`): nama satuan hidup di master milik owner, `product_uoms.unit_id` menunjuknya, nama dikunci begitu dipakai produk, dan layar produk hanya memilih dari dropdown. Layar produk tidak lagi menampilkan `BASE`/`PACK` — pengguna menunjuk satuan dasar lalu mendaftar isi tiap kemasan. **Harga jual sepenuhnya pindah ke daftar harga**: kolom `product_uoms.selling_price` dihapus, urutan pemilihan harga menjadi penelusuran kandidat (pelanggan → lokasi penjualan → seluruh lokasi → bawaan) yang lanjut ke kandidat berikutnya bila produknya tidak ada, dan produk tanpa harga di mana pun **tidak boleh dijual** alih-alih jatuh ke harga cadangan. Lokasi daftar harga dibatasi ke lokasi ber-`can_sell`. **Section 39.13 baru**: pelanggan tunai bawaan per usaha supaya kasir tidak perlu memilih pelanggan, penanda `customers.is_member`, dan `price_lists.customer_only` berganti nama menjadi `member_only` — istilah layar ikut berubah menjadi "harga normal" dan "khusus member" |
 | 1.3 Rev.6 | Draft — 20 Agu 2026 | Menambah **Section 39.10–39.12 Daftar Harga Jual**: tabel `price_lists` dan `price_list_items` sebagai lapisan override di atas `product_uoms.selling_price`, dengan harga melekat pada satuan dan bertingkat lewat `min_qty` (Rinso 1 dus 20.000 / 1 pcs 2.500 / ≥6 pcs 2.300). Ditetapkan urutan pemilihan harga pelanggan → lokasi → owner → default → harga standar, tanpa konversi harga otomatis antar satuan. Sengaja **tidak** dibuat section baru agar penomoran tidak bergeser untuk ketiga kalinya; harga per satuan adalah kelanjutan langsung Section 39. Schema: `price_lists`, `price_list_items`, `sale_items.price_list_id`, `customers.price_list_id`. **Schema Section 58 akhirnya disinkronkan** (utang sejak Rev.4): tabel `goods_receipts` dan `goods_receipt_items`, `stock_lots.purchase_item_id` menjadi `receipt_item_id`, `reference_type` `RECEIPT` pada `stock_movements`, akun GRNI masuk seeder `chart_of_accounts` |
 | 1.3 Rev.5 | Draft — 20 Agu 2026 | Menambah **Section 59 Tipe Lokasi: Toko, Depo & Gudang**. `branches` mendapat `branch_type` (`STORE` / `DEPO` / `WAREHOUSE`) dan `can_sell`, sehingga sebuah lokasi dapat menyimpan dan memindahkan barang tanpa melayani penjualan. Gudang tetap wajib memiliki fiscal period karena nilai persediaannya masuk pembukuan. Depo diperlakukan sama dengan toko. Pembelian boleh masuk langsung ke lokasi mana pun. Ditambah role **GUDANG** untuk petugas barang yang tidak menyentuh uang maupun harga. Section 59–65 lama bergeser menjadi 60–66 beserta rujukan silangnya. Ikut menyesuaikan: matrix hak akses (50), hak akses penerimaan (58.7), acceptance criteria (56.19), glossary (64). Schema: kolom `branches.branch_type` dan `branches.can_sell`, nilai `GUDANG` pada `users.role` |
 | 1.3 Rev.4 | Draft — 19 Agu 2026 | Menambah **Section 58 Penerimaan Barang & Faktur Pemasok**: stok kini bertambah saat penerimaan, bukan saat faktur; penerimaan dapat dicatat kasir dengan qty saja; selisih harga memicu recalculate HPP; penerimaan tanpa faktur duduk di akun Utang Belum Ditagih dan memblokir penutupan periode. Section 58–64 lama bergeser menjadi 59–65 beserta seluruh rujukan silangnya. Ikut menyesuaikan: jurnal (54.1), retur pembelian (48.2), matrix hak akses (50), acceptance criteria (56.18). Schema: tabel `goods_receipts` dan `goods_receipt_items`, `stock_lots.purchase_item_id` menjadi `receipt_item_id` |

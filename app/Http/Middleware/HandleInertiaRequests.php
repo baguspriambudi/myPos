@@ -49,6 +49,8 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'success' => $request->session()->get('success'),
                 'error' => $request->session()->get('error'),
+                // Struk nota yang baru terbit; dikirim sekali lalu hilang.
+                'nota' => $request->session()->get('nota'),
             ],
         ];
     }

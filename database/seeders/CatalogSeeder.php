@@ -8,10 +8,11 @@ use App\Models\PriceListItem;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ProductUom;
+use App\Models\Unit;
 use Illuminate\Database\Seeder;
 
 /**
- * Kategori, produk beserta satuannya, dan daftar harga bertingkat.
+ * Master satuan, kategori, produk beserta satuannya, dan daftar harga bertingkat.
  *
  * Baris Rinso sengaja dibuat persis seperti contoh yang diminta: satu dus
  * 20.000, satu pcs 2.500, dan tingkat menengah 2.300 untuk pembelian >= 6 pcs.
@@ -24,14 +25,39 @@ class CatalogSeeder extends Seeder
         $ownerId = $owner->owner_id;
 
         $categories = collect([
-            'Sembako', 'Minuman', 'Makanan Ringan', 'Kebersihan', 'Perawatan Diri',
+            'Sembako', 'Minuman', 'Makanan Ringan', 'Kebersihan', 'Perawatan Diri', 'Jasa', 'Inventaris',
         ])->mapWithKeys(fn (string $name) => [
             $name => ProductCategory::create(['owner_id' => $ownerId, 'category_name' => $name]),
         ]);
 
+        // Daftar satuan awal. Nama satuan hanya boleh berasal dari sini.
+        $units = collect([
+            'PCS' => 'Satuan terkecil, dijual eceran',
+            'DUS' => 'Kemasan kardus dari pemasok',
+            'RENTENG' => 'Sachet berderet',
+            'LUSIN' => '12 buah',
+            'PAK' => 'Bungkus isi beberapa buah',
+            'TRAY' => 'Rak telur',
+            'SAK' => 'Karung',
+            'KG' => 'Kilogram, untuk barang timbang',
+            'GRAM' => 'Gram',
+            'LITER' => 'Liter, untuk barang curah cair',
+            'BOTOL' => 'Kemasan botol',
+            'KALI' => 'Sekali layanan, untuk jasa',
+            'UNIT' => 'Satu buah utuh, untuk aset',
+        ])->map(fn (string $keterangan, string $nama) => Unit::create([
+            'owner_id' => $ownerId,
+            'unit_name' => $nama,
+            'description' => $keterangan,
+        ]));
+
         /**
          * Format: [nama, sku, barcode, kategori, ditimbang, [satuan...]]
-         * Satuan: [nama, tipe, faktor konversi, harga standar]
+         * Satuan: [nama, tipe, faktor konversi, harga eceran]
+         *
+         * Harga di sini tidak disimpan di produk — ia menjadi baris min_qty 1
+         * pada daftar harga umum, karena daftar harga adalah satu-satunya sumber
+         * harga jual (Addendum 39.10).
          */
         $catalog = [
             ['Rinso Cair Sachet 45g', 'RNS-045', '8999999521004', 'Kebersihan', false, [
@@ -91,14 +117,14 @@ class CatalogSeeder extends Seeder
 
             $baseUomId = null;
 
-            foreach ($uoms as [$uomName, $uomType, $factor, $price]) {
+            foreach ($uoms as [$uomName, $uomType, $factor]) {
                 $uom = ProductUom::create([
                     'product_id' => $product->product_id,
+                    'unit_id' => $units[$uomName]->unit_id,
                     'uom_name' => $uomName,
                     'uom_type' => $uomType,
                     'conversion_factor' => $factor,
                     'is_default' => $uomType === 'BASE',
-                    'selling_price' => $price,
                 ]);
 
                 if ($uomType === 'BASE') {
@@ -110,31 +136,87 @@ class CatalogSeeder extends Seeder
             $products[$sku] = $product->fresh('uoms');
         }
 
-        $this->seedPriceLists($ownerId, $products);
+        // Contoh jenis produk selain barang dagang (Addendum 39.14). Keduanya
+        // sengaja ada sejak seeder supaya bedanya kelihatan tanpa harus diisi
+        // manual dulu: jasa boleh dijual tapi tanpa stok, aset punya stok tapi
+        // tidak pernah muncul di daftar harga.
+        $products['JSA-ANTAR'] = $this->seedSatuSatuan(
+            $ownerId,
+            $categories['Jasa']->category_id,
+            Product::TYPE_SERVICE,
+            'Antar Barang Dalam Kota',
+            'JSA-ANTAR',
+            $units['KALI']->unit_id,
+            'KALI',
+        );
+
+        $products['AST-FRZ'] = $this->seedSatuSatuan(
+            $ownerId,
+            $categories['Inventaris']->category_id,
+            Product::TYPE_ASSET,
+            'Freezer Box 200L',
+            'AST-FRZ',
+            $units['UNIT']->unit_id,
+            'UNIT',
+        );
+
+        $this->seedPriceLists($ownerId, $products, $catalog);
     }
 
-    private function seedPriceLists(int $ownerId, array $products): void
+    /** Produk bersatuan tunggal: jasa dan aset tidak punya kemasan. */
+    private function seedSatuSatuan(
+        int $ownerId,
+        int $categoryId,
+        string $type,
+        string $name,
+        string $sku,
+        int $unitId,
+        string $uomName,
+    ): Product {
+        $product = Product::create([
+            'owner_id' => $ownerId,
+            'category_id' => $categoryId,
+            'product_type' => $type,
+            'product_name' => $name,
+            'sku' => $sku,
+        ]);
+
+        $uom = ProductUom::create([
+            'product_id' => $product->product_id,
+            'unit_id' => $unitId,
+            'uom_name' => $uomName,
+            'uom_type' => 'BASE',
+            'conversion_factor' => 1,
+            'is_default' => true,
+        ]);
+
+        $product->update(['base_uom_id' => $uom->uom_id]);
+
+        return $product->fresh('uoms');
+    }
+
+    private function seedPriceLists(int $ownerId, array $products, array $catalog): void
     {
         // Daftar harga umum: dipakai bila tidak ada yang lebih spesifik.
         $umum = PriceList::create([
             'owner_id' => $ownerId,
             'branch_id' => null,
             'price_list_code' => 'PL-UMUM',
-            'price_list_name' => 'Harga Umum (Eceran)',
+            'price_list_name' => 'Harga Normal (Eceran)',
             'is_default' => true,
             'priority' => 0,
         ]);
 
-        // Daftar harga grosir: HANYA untuk pelanggan yang ditugaskan lewat
-        // customers.price_list_id. customer_only menjaganya agar tidak ikut
-        // menjadi harga umum walaupun prioritasnya lebih tinggi.
+        // Daftar harga grosir: HANYA untuk pelanggan bertanda member. Tanda
+        // member_only itulah yang menjaganya agar tidak ikut menjadi harga umum
+        // walaupun prioritasnya lebih tinggi.
         $grosir = PriceList::create([
             'owner_id' => $ownerId,
             'branch_id' => null,
             'price_list_code' => 'PL-GROSIR',
-            'price_list_name' => 'Harga Grosir',
+            'price_list_name' => 'Harga Grosir Member',
             'is_default' => false,
-            'customer_only' => true,
+            'member_only' => true,
             'priority' => 10,
         ]);
 
@@ -154,42 +236,40 @@ class CatalogSeeder extends Seeder
             ]);
         };
 
+        // Harga eceran setiap satuan masuk daftar harga umum. Wajib lengkap:
+        // produk yang tidak punya baris harga tidak dapat dijual sama sekali.
+        foreach ($catalog as [$name, $sku, $barcode, $categoryName, $weighted, $uoms]) {
+            foreach ($uoms as [$uomName, $uomType, $factor, $price]) {
+                $tier($umum, $products[$sku], $uomName, 1, $price);
+            }
+        }
+
         // ------------------------------------------------------ contoh Rinso
         $rinso = $products['RNS-045'];
-        $tier($umum, $rinso, 'PCS', 1, 2500);   // ecer
         $tier($umum, $rinso, 'PCS', 6, 2300);   // ecer banyak, di bawah satu dus
-        $tier($umum, $rinso, 'DUS', 1, 20000);  // beli per dus
         $tier($grosir, $rinso, 'PCS', 1, 2200);
         $tier($grosir, $rinso, 'DUS', 1, 19000);
         $tier($grosir, $rinso, 'DUS', 5, 18500); // grosir, mulai 5 dus
 
+        // ------------------------------------------------------------- jasa
+        // Jasa tetap butuh baris harga seperti barang: daftar harga adalah
+        // satu-satunya sumber harga jual, apa pun jenis produknya. Yang tidak
+        // dimiliki jasa hanyalah stok.
+        $tier($umum, $products['JSA-ANTAR'], 'KALI', 1, 15000);
+
+        // Aset (AST-FRZ) sengaja TIDAK diberi harga — ia memang tidak dijual.
+
         // ---------------------------------------------------- produk lainnya
         $indomie = $products['IDM-GRG'];
-        $tier($umum, $indomie, 'PCS', 1, 3500);
         $tier($umum, $indomie, 'PCS', 10, 3300);
-        $tier($umum, $indomie, 'DUS', 1, 128000);
         $tier($grosir, $indomie, 'DUS', 1, 124000);
 
-        $aqua = $products['AQU-600'];
-        $tier($umum, $aqua, 'PCS', 1, 4000);
-        $tier($umum, $aqua, 'DUS', 1, 88000);
-        $tier($grosir, $aqua, 'DUS', 1, 84000);
-
-        $kopi = $products['KKA-065'];
-        $tier($umum, $kopi, 'PCS', 1, 2000);
-        $tier($umum, $kopi, 'RENTENG', 1, 18500);
-        $tier($umum, $kopi, 'DUS', 1, 216000);
-        $tier($grosir, $kopi, 'DUS', 1, 208000);
-
-        $minyak = $products['BML-1L'];
-        $tier($umum, $minyak, 'PCS', 1, 18000);
-        $tier($umum, $minyak, 'DUS', 1, 205000);
-        $tier($grosir, $minyak, 'DUS', 1, 198000);
+        $tier($grosir, $products['AQU-600'], 'DUS', 1, 84000);
+        $tier($grosir, $products['KKA-065'], 'DUS', 1, 208000);
+        $tier($grosir, $products['BML-1L'], 'DUS', 1, 198000);
 
         $gula = $products['GLA-CRH'];
-        $tier($umum, $gula, 'KG', 1, 15000);
         $tier($umum, $gula, 'KG', 10, 14500);
-        $tier($umum, $gula, 'SAK', 1, 360000);
         $tier($grosir, $gula, 'SAK', 1, 348000);
     }
 }

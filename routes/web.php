@@ -1,6 +1,11 @@
 <?php
 
+use App\Http\Controllers\Banking\ExpenseController;
+use App\Http\Controllers\Banking\PayableController;
+use App\Http\Controllers\Banking\ReceivableController;
 use App\Http\Controllers\BranchSwitchController;
+use App\Http\Controllers\Kasir\CashierShiftController;
+use App\Http\Controllers\Kasir\KasirController;
 use App\Http\Controllers\Master\BranchController;
 use App\Http\Controllers\Master\ChartOfAccountController;
 use App\Http\Controllers\Master\CustomerController;
@@ -12,7 +17,16 @@ use App\Http\Controllers\Master\ProductCategoryController;
 use App\Http\Controllers\Master\ProductController;
 use App\Http\Controllers\Master\SupplierController;
 use App\Http\Controllers\Master\TaxController;
+use App\Http\Controllers\Master\UnitController;
 use App\Http\Controllers\Master\UserController;
+use App\Http\Controllers\Pembelian\GoodsReceiptController;
+use App\Http\Controllers\Pembelian\PurchaseInvoiceController;
+use App\Http\Controllers\Pembelian\PurchaseReturnController;
+use App\Http\Controllers\Penjualan\SaleController;
+use App\Http\Controllers\Penjualan\SalesReturnController;
+use App\Http\Controllers\Persediaan\StockAdjustmentController;
+use App\Http\Controllers\Persediaan\StockOpnameController;
+use App\Http\Controllers\Persediaan\StockTransferController;
 use Illuminate\Support\Facades\Route;
 use Inertia\Inertia;
 
@@ -45,6 +59,12 @@ Route::middleware(['auth'])->group(function () {
         Route::post('kategori', [ProductCategoryController::class, 'store'])->name('kategori.store');
         Route::put('kategori/{category}', [ProductCategoryController::class, 'update'])->name('kategori.update');
         Route::delete('kategori/{category}', [ProductCategoryController::class, 'destroy'])->name('kategori.destroy');
+
+        // Nama satuan dikelola di sini; layar produk hanya memilih dari daftar ini.
+        Route::get('satuan', [UnitController::class, 'index'])->name('satuan.index');
+        Route::post('satuan', [UnitController::class, 'store'])->name('satuan.store');
+        Route::put('satuan/{unit}', [UnitController::class, 'update'])->name('satuan.update');
+        Route::delete('satuan/{unit}', [UnitController::class, 'destroy'])->name('satuan.destroy');
 
         Route::get('produk', [ProductController::class, 'index'])->name('produk.index');
         Route::post('produk', [ProductController::class, 'store'])->name('produk.store');
@@ -98,17 +118,79 @@ Route::middleware(['auth'])->group(function () {
     |----------------------------------------------------------------------
     | Halaman operasional
     |----------------------------------------------------------------------
-    | Tampilannya sengaja belum diubah. Angkanya masih dari data contoh di
-    | resources/js/data/dummy.ts dan akan disambungkan ke database pada tahap
-    | berikutnya, setelah modul transaksi dikerjakan.
+    | Kasir sudah memakai database. Sisanya masih memakai data contoh di
+    | resources/js/data/dummy.ts dan menyusul satu per satu bersama modul
+    | transaksinya masing-masing.
     */
     Route::get('dashboard', fn () => Inertia::render('dashboard'))->name('dashboard');
-    Route::get('kasir', fn () => Inertia::render('kasir/index'))->name('kasir.index');
-    Route::get('penjualan', fn () => Inertia::render('penjualan/index'))->name('penjualan.index');
-    Route::get('pembelian', fn () => Inertia::render('pembelian/index'))->name('pembelian.index');
+
+    // Penjualan dari layar kasir (Addendum 51.2, 51.4, 52).
+    Route::get('kasir', [KasirController::class, 'index'])->name('kasir.index');
+    Route::post('kasir/nota', [KasirController::class, 'store'])->name('kasir.nota.store');
+    // Shift bukan prasyarat berjualan — lihat SalePoster. Sekadar menaut
+    // transaksi yang terjadi selama ia terbuka supaya bisa direkonsiliasi.
+    Route::post('kasir/shift/buka', [CashierShiftController::class, 'buka'])->name('kasir.shift.buka');
+    Route::post('kasir/shift/{shift}/tutup', [CashierShiftController::class, 'tutup'])->name('kasir.shift.tutup');
+    // Daftar nota + pembatalan. Void mengembalikan stok ke lot asalnya dan
+    // membatalkan pembayarannya (Addendum 41).
+    Route::get('penjualan', [SaleController::class, 'index'])->name('penjualan.index');
+    Route::post('penjualan/{sale}/batal', [SaleController::class, 'void'])->name('penjualan.batal');
+    // Retur mengacu ke nota, memakai fiscal period TANGGAL RETUR — boleh
+    // lintas period bahkan setelah period nota CLOSED (Addendum 48).
+    Route::get('retur/penjualan', [SalesReturnController::class, 'index'])->name('retur.penjualan.index');
+    Route::post('retur/penjualan', [SalesReturnController::class, 'store'])->name('retur.penjualan.store');
+    Route::post('retur/penjualan/{salesReturn}/batal', [SalesReturnController::class, 'void'])->name('retur.penjualan.batal');
+
+    // Barang datang dulu, fakturnya menyusul — dua dokumen terpisah, dan hanya
+    // penerimaan yang menambah stok (Addendum 58).
+    Route::get('penerimaan', [GoodsReceiptController::class, 'index'])->name('penerimaan.index');
+    Route::post('penerimaan', [GoodsReceiptController::class, 'store'])->name('penerimaan.store');
+    Route::post('penerimaan/{goodsReceipt}/batal', [GoodsReceiptController::class, 'void'])->name('penerimaan.batal');
+
+    Route::get('pembelian', [PurchaseInvoiceController::class, 'index'])->name('pembelian.index');
+    Route::post('pembelian', [PurchaseInvoiceController::class, 'store'])->name('pembelian.store');
+    Route::post('pembelian/{purchase}/batal', [PurchaseInvoiceController::class, 'void'])->name('pembelian.batal');
+
+    // Retur pembelian mengacu ke PENERIMAAN, bukan faktur — lot lahir dari
+    // penerimaan (Addendum 58.6).
+    Route::get('retur/pembelian', [PurchaseReturnController::class, 'index'])->name('retur.pembelian.index');
+    Route::post('retur/pembelian', [PurchaseReturnController::class, 'store'])->name('retur.pembelian.store');
+    Route::post('retur/pembelian/{purchaseReturn}/batal', [PurchaseReturnController::class, 'void'])->name('retur.pembelian.batal');
     Route::get('produk', fn () => Inertia::render('produk/index'))->name('produk.index');
     Route::get('stok', fn () => Inertia::render('stok/index'))->name('stok.index');
-    Route::get('biaya', fn () => Inertia::render('biaya/index'))->name('biaya.index');
+
+    // Penyesuaian stok: satu-satunya cara mengubah saldo tanpa dokumen
+    // jual-beli, karena itu dibatasi MANAJER ke atas (Addendum 50).
+    Route::get('stok/penyesuaian', [StockAdjustmentController::class, 'index'])->name('stok.penyesuaian.index');
+    Route::post('stok/penyesuaian', [StockAdjustmentController::class, 'store'])->name('stok.penyesuaian.store');
+
+    // Transfer langsung, tanpa state IN_TRANSIT di tahap ini (Addendum 49.2).
+    Route::get('stok/transfer', [StockTransferController::class, 'index'])->name('stok.transfer.index');
+    Route::post('stok/transfer', [StockTransferController::class, 'store'])->name('stok.transfer.store');
+    Route::post('stok/transfer/{stockTransfer}/batal', [StockTransferController::class, 'void'])->name('stok.transfer.batal');
+
+    // Hitung fisik (DRAFT, semua peran) lalu terapkan (MANAJER ke atas) —
+    // menerapkan membuat StockAdjustment, bukan movement sendiri.
+    Route::get('stok/opname', [StockOpnameController::class, 'index'])->name('stok.opname.index');
+    Route::post('stok/opname', [StockOpnameController::class, 'store'])->name('stok.opname.store');
+    Route::post('stok/opname/{stockOpname}/terapkan', [StockOpnameController::class, 'terapkan'])->name('stok.opname.terapkan');
+    Route::post('stok/opname/{stockOpname}/batal', [StockOpnameController::class, 'batal'])->name('stok.opname.batal');
+
+    // Biaya CASH menulis cash_transactions (Addendum 60.2) — jalur pertama di
+    // aplikasi yang menyentuh buku kas; penjualan tunai belum menulis ke sana.
+    Route::get('biaya', [ExpenseController::class, 'index'])->name('biaya.index');
+    Route::post('biaya', [ExpenseController::class, 'store'])->name('biaya.store');
+    Route::post('biaya/{expense}/batal', [ExpenseController::class, 'void'])->name('biaya.batal');
+    // Lahir otomatis saat faktur pemasok diposting (Addendum 58.3). Pembayaran
+    // CASH menulis cash_transactions, sama seperti biaya operasional.
+    Route::get('utang', [PayableController::class, 'index'])->name('utang.index');
+    Route::post('utang/{payable}/bayar', [PayableController::class, 'bayar'])->name('utang.bayar');
+    Route::post('utang/pembayaran/{payment}/batal', [PayableController::class, 'batalBayar'])->name('utang.pembayaran.batal');
+
+    // Lahir dari nota kasir berbayar kredit (Addendum 41.3).
+    Route::get('piutang', [ReceivableController::class, 'index'])->name('piutang.index');
+    Route::post('piutang/{receivable}/terima', [ReceivableController::class, 'terima'])->name('piutang.terima');
+    Route::post('piutang/pembayaran/{payment}/batal', [ReceivableController::class, 'batalTerima'])->name('piutang.pembayaran.batal');
     Route::get('periode', fn () => Inertia::render('periode/index'))->name('periode.index');
     Route::get('laporan', fn () => Inertia::render('laporan/index'))->name('laporan.index');
 });
