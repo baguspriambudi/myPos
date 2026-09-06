@@ -1,5 +1,5 @@
 import { Head, useForm } from '@inertiajs/react';
-import { LoaderCircle } from 'lucide-react';
+import { Eye, EyeOff, LoaderCircle } from 'lucide-react';
 import { FormEventHandler, useState } from 'react';
 
 import InputError from '@/components/input-error';
@@ -28,6 +28,10 @@ export default function Login({ status }: { status?: string }) {
     // Kode usaha hanya diminta bila server bilang username-nya ambigu, supaya
     // kasir tidak perlu mengetiknya setiap ganti shift.
     const [tampilkanKodeUsaha, setTampilkanKodeUsaha] = useState(false);
+
+    // Kata sandi kasir sering diketik di layar sentuh yang kecil; tanpa cara
+    // mengintipnya, salah ketik satu huruf hanya terlihat sebagai "gagal masuk".
+    const [tampilkanSandi, setTampilkanSandi] = useState(false);
 
     const submit: FormEventHandler = (e) => {
         e.preventDefault();
@@ -64,16 +68,33 @@ export default function Login({ status }: { status?: string }) {
 
                     <div className="grid gap-2">
                         <Label htmlFor="password">Kata sandi</Label>
-                        <Input
-                            id="password"
-                            type="password"
-                            required
-                            tabIndex={2}
-                            autoComplete="current-password"
-                            value={data.password}
-                            onChange={(e) => setData('password', e.target.value)}
-                            placeholder="••••••••"
-                        />
+                        <div className="relative">
+                            <Input
+                                id="password"
+                                type={tampilkanSandi ? 'text' : 'password'}
+                                required
+                                tabIndex={2}
+                                autoComplete="current-password"
+                                value={data.password}
+                                onChange={(e) => setData('password', e.target.value)}
+                                placeholder="••••••••"
+                                className="pr-9"
+                            />
+                            <button
+                                type="button"
+                                // Sengaja di luar urutan tab: menekan Tab dari kolom
+                                // sandi harus langsung ke tombol Masuk, bukan mampir
+                                // ke tombol intip.
+                                tabIndex={-1}
+                                onClick={() => setTampilkanSandi((v) => !v)}
+                                className="text-muted-foreground hover:text-foreground absolute top-1/2 right-2 -translate-y-1/2"
+                                aria-label={tampilkanSandi ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                                aria-pressed={tampilkanSandi}
+                                title={tampilkanSandi ? 'Sembunyikan kata sandi' : 'Tampilkan kata sandi'}
+                            >
+                                {tampilkanSandi ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            </button>
+                        </div>
                         <InputError message={errors.password} />
                     </div>
 
