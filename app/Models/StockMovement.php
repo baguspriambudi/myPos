@@ -43,6 +43,12 @@ class StockMovement extends Model
     /** Masuk ke branch penerima transfer, lot baru dengan cost dari pengirim (Addendum 49.3). */
     public const TYPE_TRANSFER_IN = 'TRANSFER_IN';
 
+    /** Saldo awal period pertama (Addendum 40.2). */
+    public const REF_OPENING = 'OPENING';
+
+    /** Koreksi pembulatan HPP yang dibuat proses closing (Addendum 51.3). */
+    public const REF_CLOSING = 'CLOSING';
+
     public const REF_SALES = 'SALES';
 
     public const REF_ADJUSTMENT = 'ADJUSTMENT';

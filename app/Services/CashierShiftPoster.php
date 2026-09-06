@@ -23,6 +23,7 @@ class CashierShiftPoster
     public function __construct(
         private DocumentNumberService $numbers,
         private FiscalPeriodResolver $periods,
+        private CashDifferenceResolver $differences,
     ) {}
 
     /**
@@ -109,6 +110,12 @@ class CashierShiftPoster
                 'status' => CashierShift::STATUS_CLOSED,
                 'closed_by' => $user->user_id,
             ]);
+
+            // Selisih uang laci menjadi perkara tersendiri yang harus
+            // diselesaikan orang, bukan angka yang berhenti di kolom shift
+            // (Addendum 46). Tanpa baris ini, selisih tidak pernah muncul di
+            // pemeriksaan pra-tutup periode.
+            $this->differences->catatDariShift($shift->fresh());
 
             return $shift->fresh();
         });
