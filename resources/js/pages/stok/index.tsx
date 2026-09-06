@@ -1,56 +1,76 @@
-import { Head } from '@inertiajs/react';
-import { useMemo, useState } from 'react';
-import { Boxes } from 'lucide-react';
-import AppLayout from '@/layouts/app-layout';
+import { Chip, NativeSelect } from '@/components/master-ui';
+import { EmptyRow, PageHeader, Panel, formatDate, formatQty, formatRupiah } from '@/components/pos-ui';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import {
-    EmptyRow,
-    PageHeader,
-    Panel,
-    SearchInput,
-    TablePagination,
-    formatDate,
-    formatQty,
-    formatRupiah,
-    usePagination,
-} from '@/components/pos-ui';
-import { products, stockMovements } from '@/data/dummy';
+import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
+import { Head, router, usePage } from '@inertiajs/react';
+import { Boxes } from 'lucide-react';
 
 const breadcrumbs: BreadcrumbItem[] = [
     { title: 'Persediaan', href: '#' },
     { title: 'Kartu Stok', href: '/stok' },
 ];
 
-const MOVEMENT_LABEL: Record<string, string> = {
+const LABEL_JENIS: Record<string, string> = {
     OPENING: 'Saldo Awal',
-    PURCHASE: 'Pembelian',
+    PURCHASE: 'Penerimaan',
     SALES: 'Penjualan',
     ADJUSTMENT_IN: 'Penyesuaian Masuk',
     ADJUSTMENT_OUT: 'Penyesuaian Keluar',
     TRANSFER_IN: 'Transfer Masuk',
     TRANSFER_OUT: 'Transfer Keluar',
     RETURN_IN: 'Retur Masuk',
+    RETURN_OUT: 'Retur Keluar',
     VOID_REVERSAL: 'Pembalikan Void',
+    ROUNDING: 'Koreksi Pembulatan',
+    CORRECTION: 'Koreksi',
 };
 
+const LABEL_REFERENSI: Record<string, string> = {
+    SALES: 'Nota',
+    RECEIPT: 'Penerimaan',
+    PURCHASE: 'Pembelian',
+    ADJUSTMENT: 'Penyesuaian',
+    OPNAME: 'Opname',
+    TRANSFER: 'Transfer',
+    SALES_RETURN: 'Retur Jual',
+    PURCHASE_RETURN: 'Retur Beli',
+    OPENING: 'Saldo Awal',
+    CLOSING: 'Penutupan',
+};
+
+interface Pergerakan {
+    id: number;
+    date: string;
+    type: string;
+    reference: string | null;
+    referenceId: number | null;
+    product: string;
+    sku: string;
+    qtyBase: number;
+    unitCost: number | null;
+    totalCost: number | null;
+    balance: number | null;
+}
+
 export default function StokIndex() {
-    const [search, setSearch] = useState('');
+    const { products, productId, movements, summary, canSeeCost, branch } = usePage().props as unknown as {
+        products: { id: number; name: string; sku: string }[];
+        productId: number | null;
+        movements: Pergerakan[];
+        summary: { productCount: number; totalQty: number; emptyCount: number; totalValue: number | null } | null;
+        canSeeCost: boolean;
+        branch: { id: number; name: string } | null;
+    };
 
-    const visible = useMemo(() => {
-        const q = search.trim().toLowerCase();
-        if (!q) return stockMovements;
-        return stockMovements.filter(
-            (m) => m.product.toLowerCase().includes(q) || m.reference.toLowerCase().includes(q),
-        );
-    }, [search]);
+    const kartuSatuProduk = productId !== null;
 
-    const pagination = usePagination(visible, 10);
+    function pilihProduk(nilai: string) {
+        router.get('/stok', nilai === '' ? {} : { produk: Number(nilai) }, { preserveState: true, preserveScroll: true });
+    }
 
-    const nilaiPersediaan = products.reduce((s, p) => s + p.stock * p.avgCost, 0);
-    const totalUnit = products.reduce((s, p) => s + p.stock, 0);
-    const habis = products.filter((p) => p.stock <= 0).length;
+    const kolom = 6 + (canSeeCost ? 1 : 0) + (kartuSatuProduk ? 1 : 0);
 
     return (
         <AppLayout breadcrumbs={breadcrumbs}>
@@ -59,92 +79,114 @@ export default function StokIndex() {
             <div className="flex flex-col gap-4 p-4 md:p-5">
                 <PageHeader
                     title="Kartu Stok"
-                    subtitle="Riwayat pergerakan stok dalam satuan dasar. Urutannya menjadi dasar perhitungan ulang HPP."
+                    subtitle={
+                        kartuSatuProduk
+                            ? 'Riwayat satu produk, urut maju dengan saldo berjalan — urutan inilah yang dipakai perhitungan ulang HPP.'
+                            : 'Pergerakan stok di lokasi ini dalam satuan dasar. Pilih satu produk untuk melihat saldo berjalannya.'
+                    }
                 />
 
                 <div className="grid gap-3 sm:grid-cols-3">
-                    <div className="rounded-lg border bg-card px-4 py-3">
-                        <p className="label-eyebrow">Nilai persediaan</p>
-                        <p className="mt-1 font-mono text-xl font-semibold tabular">{formatRupiah(nilaiPersediaan)}</p>
+                    <div className="bg-card rounded-lg border px-4 py-3">
+                        <p className="label-eyebrow">{canSeeCost ? 'Nilai persediaan' : 'Produk bersaldo'}</p>
+                        <p className="tabular mt-1 font-mono text-xl font-semibold">
+                            {canSeeCost ? formatRupiah(summary?.totalValue ?? 0) : (summary?.productCount ?? 0)}
+                        </p>
                     </div>
-                    <div className="rounded-lg border bg-card px-4 py-3">
+                    <div className="bg-card rounded-lg border px-4 py-3">
                         <p className="label-eyebrow">Total unit dasar</p>
-                        <p className="mt-1 font-mono text-xl font-semibold tabular">{formatQty(totalUnit)}</p>
+                        <p className="tabular mt-1 font-mono text-xl font-semibold">{formatQty(summary?.totalQty ?? 0)}</p>
                     </div>
-                    <div className="rounded-lg border bg-card px-4 py-3">
+                    <div className="bg-card rounded-lg border px-4 py-3">
                         <p className="label-eyebrow">Produk habis</p>
-                        <p
-                            className={cn(
-                                'mt-1 font-mono text-xl font-semibold tabular',
-                                habis > 0 && 'text-destructive',
-                            )}
-                        >
-                            {habis}
+                        <p className={cn('tabular mt-1 font-mono text-xl font-semibold', (summary?.emptyCount ?? 0) > 0 && 'text-destructive')}>
+                            {summary?.emptyCount ?? 0}
                         </p>
                     </div>
                 </div>
 
-                <SearchInput
-                    value={search}
-                    onChange={setSearch}
-                    placeholder="Cari produk atau nomor referensi..."
-                    className="w-full sm:max-w-xs"
-                />
+                <div className="flex flex-wrap items-center gap-2">
+                    <span className="label-eyebrow">Produk</span>
+                    <div className="w-full sm:max-w-sm">
+                        <NativeSelect
+                            value={productId ?? ''}
+                            onChange={pilihProduk}
+                            placeholder="Semua produk"
+                            options={products.map((p) => ({ value: p.id, label: `${p.name} (${p.sku})` }))}
+                        />
+                    </div>
+                    {branch && <span className="text-muted-foreground text-xs">di {branch.name}</span>}
+                </div>
 
                 <Panel
                     title="Pergerakan Stok"
-                    description={`${visible.length} baris pada periode berjalan`}
+                    description={`${movements.length} baris${kartuSatuProduk ? '' : ' terbaru'}`}
                     bodyClassName="p-0"
                 >
                     <div className="overflow-x-auto">
                         <Table>
                             <TableHeader>
-                                <TableRow className="hover:bg-transparent">
-                                    <TableHead className="label-eyebrow">Tanggal</TableHead>
-                                    <TableHead className="label-eyebrow">Jenis</TableHead>
-                                    <TableHead className="label-eyebrow">Referensi</TableHead>
-                                    <TableHead className="label-eyebrow">Produk</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Qty</TableHead>
-                                    <TableHead className="label-eyebrow text-right">HPP Unit</TableHead>
-                                    <TableHead className="label-eyebrow text-right">Saldo</TableHead>
+                                <TableRow>
+                                    <TableHead className="w-24">Tanggal</TableHead>
+                                    <TableHead className="w-36">Jenis</TableHead>
+                                    <TableHead className="w-28">Referensi</TableHead>
+                                    {!kartuSatuProduk && <TableHead>Produk</TableHead>}
+                                    <TableHead className="w-28 text-right">Qty</TableHead>
+                                    {canSeeCost && <TableHead className="w-28 text-right">HPP Unit</TableHead>}
+                                    {canSeeCost && <TableHead className="w-28 text-right">Nilai</TableHead>}
+                                    {kartuSatuProduk && <TableHead className="w-28 text-right">Saldo</TableHead>}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
-                                {visible.length === 0 && (
-                                    <EmptyRow colSpan={7} icon={<Boxes />} message="Tidak ada pergerakan yang cocok." />
+                                {movements.length === 0 && (
+                                    <EmptyRow colSpan={kolom} icon={<Boxes />} message="Belum ada pergerakan stok di lokasi ini." />
                                 )}
-                                {pagination.paged.map((m) => (
+
+                                {movements.map((m) => (
                                     <TableRow key={m.id}>
-                                        <TableCell className="whitespace-nowrap">{formatDate(m.date)}</TableCell>
+                                        <TableCell className="tabular text-xs whitespace-nowrap">{formatDate(m.date)}</TableCell>
                                         <TableCell>
-                                            <span className="rounded bg-muted px-1.5 py-0.5 text-2xs">
-                                                {MOVEMENT_LABEL[m.type] ?? m.type}
-                                            </span>
+                                            <Chip tone={m.qtyBase >= 0 ? 'accent' : 'neutral'}>{LABEL_JENIS[m.type] ?? m.type}</Chip>
                                         </TableCell>
-                                        <TableCell className="font-mono text-xs text-muted-foreground">
-                                            {m.reference}
+                                        <TableCell className="text-2xs text-muted-foreground">
+                                            {m.reference ? (LABEL_REFERENSI[m.reference] ?? m.reference) : '—'}
+                                            {m.referenceId !== null && <span className="ml-1 font-mono">#{m.referenceId}</span>}
                                         </TableCell>
-                                        <TableCell>{m.product}</TableCell>
+                                        {!kartuSatuProduk && (
+                                            <TableCell className="text-xs">
+                                                {m.product}
+                                                <span className="text-2xs text-muted-foreground block font-mono">{m.sku}</span>
+                                            </TableCell>
+                                        )}
                                         <TableCell
                                             className={cn(
-                                                'text-right font-mono font-medium',
-                                                m.qty > 0 ? 'text-success' : 'text-destructive',
+                                                'tabular text-right font-mono text-xs font-medium',
+                                                m.qtyBase > 0 ? 'text-success' : m.qtyBase < 0 ? 'text-destructive' : 'text-muted-foreground',
                                             )}
                                         >
-                                            {m.qty > 0 ? '+' : ''}
-                                            {formatQty(m.qty)}{' '}
-                                            <span className="text-2xs text-muted-foreground">{m.uom}</span>
+                                            {m.qtyBase > 0 ? '+' : ''}
+                                            {formatQty(m.qtyBase)}
                                         </TableCell>
-                                        <TableCell className="text-right font-mono text-muted-foreground">
-                                            {formatRupiah(m.unitCost)}
-                                        </TableCell>
-                                        <TableCell className="text-right font-mono">{formatQty(m.balance)}</TableCell>
+                                        {canSeeCost && (
+                                            <TableCell className="text-muted-foreground tabular text-right font-mono text-xs">
+                                                {formatRupiah(m.unitCost ?? 0)}
+                                            </TableCell>
+                                        )}
+                                        {canSeeCost && (
+                                            <TableCell className="tabular text-right font-mono text-xs">
+                                                {formatRupiah(m.totalCost ?? 0)}
+                                            </TableCell>
+                                        )}
+                                        {kartuSatuProduk && (
+                                            <TableCell className="tabular text-right font-mono text-xs font-semibold">
+                                                {formatQty(m.balance ?? 0)}
+                                            </TableCell>
+                                        )}
                                     </TableRow>
                                 ))}
                             </TableBody>
                         </Table>
                     </div>
-                    <TablePagination {...pagination} />
                 </Panel>
             </div>
         </AppLayout>

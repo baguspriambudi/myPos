@@ -1,11 +1,18 @@
 <?php
 
 use App\Http\Controllers\Banking\ExpenseController;
+use App\Http\Controllers\Banking\FiscalPeriodController;
 use App\Http\Controllers\Banking\PayableController;
 use App\Http\Controllers\Banking\ReceivableController;
 use App\Http\Controllers\BranchSwitchController;
+use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\Kasir\CashierShiftController;
 use App\Http\Controllers\Kasir\KasirController;
+use App\Http\Controllers\Laporan\CashBookController;
+use App\Http\Controllers\Laporan\InventoryReportController;
+use App\Http\Controllers\Laporan\ProfitLossController;
+use App\Http\Controllers\Laporan\PurchaseReportController;
+use App\Http\Controllers\Laporan\SalesReportController;
 use App\Http\Controllers\Master\BranchController;
 use App\Http\Controllers\Master\ChartOfAccountController;
 use App\Http\Controllers\Master\CustomerController;
@@ -25,10 +32,10 @@ use App\Http\Controllers\Pembelian\PurchaseReturnController;
 use App\Http\Controllers\Penjualan\SaleController;
 use App\Http\Controllers\Penjualan\SalesReturnController;
 use App\Http\Controllers\Persediaan\StockAdjustmentController;
+use App\Http\Controllers\Persediaan\StockCardController;
 use App\Http\Controllers\Persediaan\StockOpnameController;
 use App\Http\Controllers\Persediaan\StockTransferController;
 use Illuminate\Support\Facades\Route;
-use Inertia\Inertia;
 
 Route::redirect('/', '/dashboard')->name('home');
 
@@ -118,11 +125,10 @@ Route::middleware(['auth'])->group(function () {
     |----------------------------------------------------------------------
     | Halaman operasional
     |----------------------------------------------------------------------
-    | Kasir sudah memakai database. Sisanya masih memakai data contoh di
-    | resources/js/data/dummy.ts dan menyusul satu per satu bersama modul
-    | transaksinya masing-masing.
+    | Seluruhnya sudah memakai database sejak 6 September 2026; tidak ada lagi
+    | layar berdata contoh, dan resources/js/data/dummy.ts sudah dihapus.
     */
-    Route::get('dashboard', fn () => Inertia::render('dashboard'))->name('dashboard');
+    Route::get('dashboard', [DashboardController::class, 'index'])->name('dashboard');
 
     // Penjualan dari layar kasir (Addendum 51.2, 51.4, 52).
     Route::get('kasir', [KasirController::class, 'index'])->name('kasir.index');
@@ -156,8 +162,9 @@ Route::middleware(['auth'])->group(function () {
     Route::get('retur/pembelian', [PurchaseReturnController::class, 'index'])->name('retur.pembelian.index');
     Route::post('retur/pembelian', [PurchaseReturnController::class, 'store'])->name('retur.pembelian.store');
     Route::post('retur/pembelian/{purchaseReturn}/batal', [PurchaseReturnController::class, 'void'])->name('retur.pembelian.batal');
-    Route::get('produk', fn () => Inertia::render('produk/index'))->name('produk.index');
-    Route::get('stok', fn () => Inertia::render('stok/index'))->name('stok.index');
+    // Kartu stok: daftar campuran seluruh produk, atau kartu satu produk
+    // dengan saldo berjalan bila ?produk= diisi.
+    Route::get('stok', [StockCardController::class, 'index'])->name('stok.index');
 
     // Penyesuaian stok: satu-satunya cara mengubah saldo tanpa dokumen
     // jual-beli, karena itu dibatasi MANAJER ke atas (Addendum 50).
@@ -191,8 +198,31 @@ Route::middleware(['auth'])->group(function () {
     Route::get('piutang', [ReceivableController::class, 'index'])->name('piutang.index');
     Route::post('piutang/{receivable}/terima', [ReceivableController::class, 'terima'])->name('piutang.terima');
     Route::post('piutang/pembayaran/{payment}/batal', [ReceivableController::class, 'batalTerima'])->name('piutang.pembayaran.batal');
-    Route::get('periode', fn () => Inertia::render('periode/index'))->name('periode.index');
-    Route::get('laporan', fn () => Inertia::render('laporan/index'))->name('laporan.index');
+    // Periode pembukuan: satu-satunya tempat angka period dibekukan jadi
+    // snapshot resmi (Addendum 40, 43-46). Menutup mengunci seluruh transaksi
+    // di dalamnya; membukanya kembali butuh permintaan + persetujuan pemilik.
+    Route::get('periode', [FiscalPeriodController::class, 'index'])->name('periode.index');
+    Route::post('periode', [FiscalPeriodController::class, 'store'])->name('periode.store');
+    Route::post('periode/{period}/opening', [FiscalPeriodController::class, 'opening'])->name('periode.opening');
+    Route::post('periode/{period}/buka', [FiscalPeriodController::class, 'buka'])->name('periode.buka');
+    Route::post('periode/{period}/tutup', [FiscalPeriodController::class, 'tutup'])->name('periode.tutup');
+    Route::post('periode/{period}/buka-ulang', [FiscalPeriodController::class, 'ajukanBuka'])->name('periode.buka-ulang');
+    Route::post('periode/buka-ulang/{reopenRequest}/setujui', [FiscalPeriodController::class, 'setujuiBuka'])->name('periode.buka-ulang.setujui');
+    Route::post('periode/buka-ulang/{reopenRequest}/tolak', [FiscalPeriodController::class, 'tolakBuka'])->name('periode.buka-ulang.tolak');
+    Route::post('periode/selisih-kas/{difference}/selesaikan', [FiscalPeriodController::class, 'selesaikanSelisih'])->name('periode.selisih.selesaikan');
+    /*
+    |----------------------------------------------------------------------
+    | Laporan
+    |----------------------------------------------------------------------
+    | Disusun per modul mengikuti sidebar. Laba rugi mengambil angka dari
+    | SNAPSHOT bila periodenya sudah ditutup — lihat FiscalPeriodFigures.
+    */
+    Route::redirect('laporan', '/laporan/laba-rugi')->name('laporan.index');
+    Route::get('laporan/penjualan', [SalesReportController::class, 'index'])->name('laporan.penjualan');
+    Route::get('laporan/pembelian', [PurchaseReportController::class, 'index'])->name('laporan.pembelian');
+    Route::get('laporan/persediaan', [InventoryReportController::class, 'index'])->name('laporan.persediaan');
+    Route::get('laporan/laba-rugi', [ProfitLossController::class, 'index'])->name('laporan.laba-rugi');
+    Route::get('laporan/kas', [CashBookController::class, 'index'])->name('laporan.kas');
 });
 
 require __DIR__.'/settings.php';

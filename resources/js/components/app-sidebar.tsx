@@ -11,6 +11,10 @@ import {
     CalendarRange,
     ClipboardList,
     FileBarChart,
+    BookText,
+    LineChart,
+    PiggyBank,
+    Warehouse,
     FolderTree,
     Coins,
     HandCoins,
@@ -45,8 +49,8 @@ import AppLogo from './app-logo';
  * sebelum "layar mana" — daftar 13 master yang berderet rata tidak pernah
  * menjawab pertanyaan pertama.
  *
- * Bagian yang belum ada layarnya sengaja tidak ditulis sebagai judul kosong;
- * begitu layarnya jadi, ia tinggal disisipkan ke bagian yang sesuai.
+ * Bagian Laporan tiap modul terisi sejak 6 September 2026; menu tunggal
+ * "/laporan" dibuang karena isinya sudah pindah ke modulnya masing-masing.
  */
 const menu: MenuEntry[] = [
     { title: 'Dashboard', url: '/dashboard', icon: LayoutGrid },
@@ -71,6 +75,10 @@ const menu: MenuEntry[] = [
                     { title: 'Diskon', url: '/master/diskon', icon: BadgePercent },
                 ],
             },
+            {
+                label: 'Laporan',
+                items: [{ title: 'Laporan Penjualan', url: '/laporan/penjualan', icon: LineChart }],
+            },
         ],
     },
 
@@ -89,6 +97,10 @@ const menu: MenuEntry[] = [
             {
                 label: 'Master',
                 items: [{ title: 'Pemasok', url: '/master/pemasok', icon: Truck }],
+            },
+            {
+                label: 'Laporan',
+                items: [{ title: 'Laporan Pembelian', url: '/laporan/pembelian', icon: FileBarChart }],
             },
         ],
     },
@@ -114,6 +126,10 @@ const menu: MenuEntry[] = [
                     { title: 'Satuan', url: '/master/satuan', icon: Ruler },
                 ],
             },
+            {
+                label: 'Laporan',
+                items: [{ title: 'Laporan Persediaan', url: '/laporan/persediaan', icon: Warehouse }],
+            },
         ],
     },
 
@@ -138,10 +154,15 @@ const menu: MenuEntry[] = [
                     { title: 'Pajak', url: '/master/pajak', icon: Percent },
                 ],
             },
+            {
+                label: 'Laporan',
+                items: [
+                    { title: 'Laba Rugi', url: '/laporan/laba-rugi', icon: PiggyBank },
+                    { title: 'Buku Kas', url: '/laporan/kas', icon: BookText },
+                ],
+            },
         ],
     },
-
-    { title: 'Laporan', url: '/laporan', icon: FileBarChart },
 
     {
         title: 'Pengaturan',
