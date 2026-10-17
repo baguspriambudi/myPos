@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\CashierShift;
 use App\Models\CashTransaction;
+use App\Models\OpeningBalance;
 use App\Models\Owner;
 use App\Models\Payment;
 use App\Models\Receivable;
@@ -147,9 +148,7 @@ class SaleVoider
     /** Saldo kas cabang per tanggal (akumulatif) harus cukup untuk refund tunai (Addendum 41.4). */
     private function assertCashBalance(int $branchId, string $date, float $refundAmount): void
     {
-        $balance = (float) CashTransaction::where('branch_id', $branchId)
-            ->where('transaction_date', '<=', $date)
-            ->sum('amount');
+        $balance = $this->cashBalance($branchId, $date);
 
         if ($balance < $refundAmount) {
             throw ValidationException::withMessages([
@@ -161,5 +160,43 @@ class SaleVoider
                 ),
             ]);
         }
+    }
+
+    /**
+     * Saldo kas cabang sampai tanggal tertentu.
+     *
+     * Baris OPENING_CASH TIDAK dijumlah semuanya: opening_cash tiap shift
+     * adalah uang laci yang digulirkan dari shift sebelumnya, jadi
+     * menjumlahkannya menghitung uang yang sama sekali per shift — dulu saldo
+     * ini membengkak dan void tunai yang seharusnya ditolak ikut lolos.
+     * Rumusnya sama dengan FiscalPeriodFigures::kas(): saldo awal yang diketik
+     * saat Initial Opening, ditambah seluruh mutasi selain OPENING_CASH. Bila
+     * cabang tidak pernah mengisi saldo awal kas, uang laci shift PERTAMA-nya
+     * yang menjadi saldo awal — itulah satu-satunya OPENING_CASH yang benar-benar
+     * uang baru.
+     */
+    private function cashBalance(int $branchId, string $date): float
+    {
+        $mutasi = (float) CashTransaction::where('branch_id', $branchId)
+            ->where('transaction_date', '<=', $date)
+            ->where('txn_type', '!=', CashTransaction::TYPE_OPENING_CASH)
+            ->sum('amount');
+
+        $saldoAwal = OpeningBalance::where('branch_id', $branchId)
+            ->where('balance_type', OpeningBalance::TYPE_CASH)
+            ->get();
+
+        if ($saldoAwal->isNotEmpty()) {
+            return round($mutasi + (float) $saldoAwal->sum('amount'), 2);
+        }
+
+        $laciPertama = CashTransaction::where('branch_id', $branchId)
+            ->where('transaction_date', '<=', $date)
+            ->where('txn_type', CashTransaction::TYPE_OPENING_CASH)
+            ->orderBy('transaction_date')
+            ->orderBy('cash_txn_id')
+            ->value('amount');
+
+        return round($mutasi + (float) $laciPertama, 2);
     }
 }

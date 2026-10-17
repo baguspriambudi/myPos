@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\Branch;
+use App\Models\CashierShift;
 use App\Models\CashTransaction;
 use App\Models\ExpenseCategory;
 use App\Models\FiscalPeriod;
@@ -306,5 +307,36 @@ class SaleVoidTest extends TestCase
 
         $this->assertSame(Sale::STATUS_POSTED, $sale->fresh()->status);
         $this->assertDatabaseMissing('cash_transactions', ['txn_type' => 'REFUND']);
+    }
+
+    public function test_uang_laci_yang_digulirkan_antar_shift_tidak_dihitung_dua_kali(): void
+    {
+        $kasir = User::where('username', 'kasir')->firstOrFail();
+
+        // Shift pertama membawa Rp100.000 ke laci, ditutup utuh, lalu shift kedua
+        // menggulirkan uang yang SAMA. Ada dua baris OPENING_CASH, tapi uangnya satu.
+        $this->actingAs($kasir)->post('/kasir/shift/buka', ['opening_cash' => 100000]);
+        $pertama = CashierShift::firstOrFail();
+        $this->actingAs($kasir)->post("/kasir/shift/{$pertama->shift_id}/tutup", ['actual_cash' => 100000]);
+        $this->actingAs($kasir)->post('/kasir/shift/buka', [])->assertRedirect();
+
+        $sale = $this->jual('JSA-ANTAR', 'KALI', 1); // +Rp15.000
+
+        $kategori = ExpenseCategory::where('owner_id', Owner::firstOrFail()->owner_id)->firstOrFail();
+        $this->actingAs($this->manajer())->post('/biaya', [
+            'expense_category_id' => $kategori->expense_category_id,
+            'transaction_date' => now()->toDateString(),
+            'description' => 'Setor ke bank.',
+            'amount' => 101000,
+            'payment_type' => 'CASH',
+        ])->assertRedirect();
+
+        // Kas sebenarnya 100.000 + 15.000 - 101.000 = 14.000, kurang dari refund
+        // 15.000. Rumus lama menjumlah kedua OPENING_CASH (114.000) dan meloloskannya.
+        $this->actingAs($this->manajer())
+            ->post("/penjualan/{$sale->sale_id}/batal", ['void_reason' => 'Pelanggan batal.'])
+            ->assertSessionHasErrors('sale');
+
+        $this->assertSame(Sale::STATUS_POSTED, $sale->fresh()->status);
     }
 }

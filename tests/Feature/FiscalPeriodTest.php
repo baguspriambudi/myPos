@@ -364,6 +364,60 @@ class FiscalPeriodTest extends TestCase
             ->assertSessionHasErrors('period');
     }
 
+    // ------------------------------------------------------ menghapus draf
+
+    public function test_periode_draf_yang_salah_dibuat_dapat_dihapus(): void
+    {
+        $draf = $this->periodeDraf();
+
+        $this->actingAs($this->pemilik())
+            ->delete("/periode/{$draf->fiscal_period_id}")
+            ->assertRedirect()
+            ->assertSessionHas('success');
+
+        $this->assertDatabaseMissing('fiscal_periods', ['fiscal_period_id' => $draf->fiscal_period_id]);
+        // Riwayat statusnya ikut hilang, jadi jejaknya harus ada di audit log.
+        $this->assertDatabaseHas('audit_logs', [
+            'entity_type' => 'fiscal_periods',
+            'entity_id' => $draf->fiscal_period_id,
+            'action' => 'DELETE',
+        ]);
+    }
+
+    public function test_periode_draf_yang_saldo_awalnya_tersimpan_tidak_dapat_dihapus(): void
+    {
+        $draf = $this->periodeDraf();
+        $rinso = $this->produk('RNS-045');
+
+        $this->actingAs($this->pemilik())->post("/periode/{$draf->fiscal_period_id}/opening", [
+            'lines' => [['product_id' => $rinso->product_id, 'uom_id' => $this->satuan($rinso, 'PCS')->uom_id, 'qty' => 5, 'unit_cost' => 2000]],
+        ])->assertSessionHas('success');
+
+        $this->actingAs($this->pemilik())
+            ->delete("/periode/{$draf->fiscal_period_id}")
+            ->assertSessionHasErrors('period');
+
+        $this->assertDatabaseHas('fiscal_periods', ['fiscal_period_id' => $draf->fiscal_period_id]);
+    }
+
+    public function test_periode_terbuka_tidak_dapat_dihapus(): void
+    {
+        $this->actingAs($this->pemilik())
+            ->delete("/periode/{$this->periode->fiscal_period_id}")
+            ->assertSessionHasErrors('period');
+
+        $this->assertDatabaseHas('fiscal_periods', ['fiscal_period_id' => $this->periode->fiscal_period_id]);
+    }
+
+    public function test_kasir_tidak_boleh_menghapus_periode(): void
+    {
+        $draf = $this->periodeDraf();
+
+        $this->actingAs($this->kasir())
+            ->delete("/periode/{$draf->fiscal_period_id}")
+            ->assertForbidden();
+    }
+
     // ------------------------------------------------------------- penutupan
 
     public function test_penutupan_membentuk_snapshot_yang_menjelaskan_periodenya(): void

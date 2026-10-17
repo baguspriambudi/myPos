@@ -115,6 +115,53 @@ class FiscalPeriodManager
     }
 
     /**
+     * Menghapus period DRAFT yang telanjur salah dibuat.
+     *
+     * Hanya selama period belum pernah menyentuh apa pun: saldo awal yang
+     * sudah tersimpan berarti stok dan lot sudah tercatat atas nama period
+     * ini, dan menghapusnya akan meninggalkan stok tanpa asal-usul. Riwayat
+     * status period ikut terhapus, jadi jejaknya dipindah ke audit_logs.
+     */
+    public function hapus(User $user, FiscalPeriod $period): void
+    {
+        if ($period->status !== FiscalPeriod::STATUS_DRAFT) {
+            throw ValidationException::withMessages([
+                'period' => "Hanya periode berstatus DRAFT yang dapat dihapus; yang ini {$period->status}.",
+            ]);
+        }
+
+        if (app(InitialOpeningPoster::class)->sudahTersimpan($period)) {
+            throw ValidationException::withMessages([
+                'period' => 'Saldo awal periode ini sudah tersimpan sehingga stoknya sudah tercatat. Periode tidak dapat dihapus lagi — buka saja lalu koreksi lewat penyesuaian stok.',
+            ]);
+        }
+
+        DB::transaction(function () use ($user, $period) {
+            DB::table('audit_logs')->insert([
+                'owner_id' => $period->owner_id,
+                'branch_id' => $period->branch_id,
+                'user_id' => $user->user_id,
+                'action' => 'DELETE',
+                'entity_type' => 'fiscal_periods',
+                'entity_id' => $period->fiscal_period_id,
+                'old_value' => json_encode([
+                    'period_code' => $period->period_code,
+                    'period_name' => $period->period_name,
+                    'start_date' => $period->start_date->toDateString(),
+                    'end_date' => $period->end_date->toDateString(),
+                ]),
+                'ip_address' => request()->ip(),
+                'created_at' => now(),
+            ]);
+
+            DB::table('document_numberings')->where('fiscal_period_id', $period->fiscal_period_id)->delete();
+            DB::table('closing_attempt_logs')->where('fiscal_period_id', $period->fiscal_period_id)->delete();
+            FiscalPeriodLog::where('fiscal_period_id', $period->fiscal_period_id)->delete();
+            $period->delete();
+        });
+    }
+
+    /**
      * Period tidak boleh bertindih pada scope yang sama (Addendum 56.2).
      *
      * Dua period yang bertindih membuat satu tanggal punya dua rumah, dan

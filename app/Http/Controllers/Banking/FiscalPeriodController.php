@@ -147,6 +147,16 @@ class FiscalPeriodController extends Controller
         return back()->with('success', "Periode {$period->period_code} dibuka dan siap menerima transaksi.");
     }
 
+    public function destroy(Request $request, FiscalPeriod $period): RedirectResponse
+    {
+        $user = $this->authorizeAkses($request);
+        $this->authorizeMilik($user, $period);
+
+        $this->manager->hapus($user, $period);
+
+        return back()->with('success', "Periode draf {$period->period_code} dihapus.");
+    }
+
     public function tutup(Request $request, FiscalPeriod $period): RedirectResponse
     {
         $user = $this->authorizeAkses($request);

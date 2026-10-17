@@ -321,7 +321,7 @@ export default function KasirIndex() {
         <AppLayout breadcrumbs={breadcrumbs}>
             <Head title="Kasir" />
 
-            <div className="flex min-h-0 flex-1 flex-col gap-3 p-4 md:p-5 lg:flex-row">
+            <div className="flex h-[calc(100svh-4rem)] flex-col gap-3 overflow-hidden p-4 md:p-5 lg:flex-row">
                 {/* =============================================== katalog produk */}
                 <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
                     {terkunci && (

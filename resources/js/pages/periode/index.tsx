@@ -1,4 +1,4 @@
-import { Chip, Field, FlashMessage, NativeSelect } from '@/components/master-ui';
+import { Chip, DeleteButton, Field, FlashMessage, NativeSelect } from '@/components/master-ui';
 import { EmptyRow, PageHeader, Panel, formatDate, formatRupiah, formatRupiahShort } from '@/components/pos-ui';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -208,6 +208,7 @@ export default function PeriodeIndex() {
         note: '',
     });
     const bukaForm = useForm({});
+    const hapusForm = useForm({});
     const tutupForm = useForm({ overrides: [] as string[], override_reason: '' });
     const bukaUlangForm = useForm({ reason: '' });
     const tinjauForm = useForm({});
@@ -737,6 +738,12 @@ export default function PeriodeIndex() {
                                         <TableCell className="text-right">
                                             <span className="flex items-center justify-end gap-1">
                                                 <Chip tone={TONE_STATUS[p.status]}>{LABEL_STATUS[p.status]}</Chip>
+                                                {p.status === 'DRAFT' && (
+                                                    <DeleteButton
+                                                        label="Hapus periode draf"
+                                                        onConfirm={() => hapusForm.delete(`/periode/${p.id}`, { preserveScroll: true })}
+                                                    />
+                                                )}
                                                 {p.status === 'CLOSED' && (
                                                     <Button
                                                         variant="ghost"

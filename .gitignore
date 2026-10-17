@@ -23,3 +23,7 @@ Homestead.json
 Homestead.yaml
 npm-debug.log
 yarn-error.log
+
+# Backup dari VPS (berisi data asli & secret)
+backup_*.sql
+.env.vps.backup
