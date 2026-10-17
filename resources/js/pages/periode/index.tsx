@@ -8,7 +8,7 @@ import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
 import { Head, useForm, usePage } from '@inertiajs/react';
-import { CalendarRange, CheckCircle2, CircleAlert, Lock, LockOpen, Plus, Scale, TriangleAlert, X } from 'lucide-react';
+import { CalendarRange, CheckCircle2, CircleAlert, Lock, LockOpen, Plus, RefreshCw, Scale, TriangleAlert, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -209,6 +209,7 @@ export default function PeriodeIndex() {
     });
     const bukaForm = useForm({});
     const hapusForm = useForm({});
+    const hppForm = useForm({});
     const tutupForm = useForm({ overrides: [] as string[], override_reason: '' });
     const bukaUlangForm = useForm({ reason: '' });
     const tinjauForm = useForm({});
@@ -490,9 +491,24 @@ export default function PeriodeIndex() {
                             </ul>
 
                             {(active.status === 'OPEN' || active.status === 'REOPENED') && (
-                                <Button size="sm" className="mt-4 w-full" onClick={bukaDialogTutup}>
-                                    <Lock className="mr-1 h-3.5 w-3.5" /> Tutup Periode
-                                </Button>
+                                <div className="mt-4 space-y-2">
+                                    {active.costingMethod !== 'FIFO' && (
+                                        <Button
+                                            size="sm"
+                                            variant="outline"
+                                            className="w-full"
+                                            disabled={hppForm.processing}
+                                            onClick={() => hppForm.post(`/periode/${active.id}/hitung-ulang-hpp`, { preserveScroll: true })}
+                                            title="Putar ulang seluruh pergerakan stok dan perbaiki HPP yang memakai rata-rata lama"
+                                        >
+                                            <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                                            {hppForm.processing ? 'Menghitung...' : 'Hitung Ulang HPP'}
+                                        </Button>
+                                    )}
+                                    <Button size="sm" className="w-full" onClick={bukaDialogTutup}>
+                                        <Lock className="mr-1 h-3.5 w-3.5" /> Tutup Periode
+                                    </Button>
+                                </div>
                             )}
                         </Panel>
                     </div>

@@ -14,11 +14,13 @@ use App\Services\CashDifferenceResolver;
 use App\Services\FiscalPeriodCloser;
 use App\Services\FiscalPeriodManager;
 use App\Services\FiscalPeriodReopener;
+use App\Services\HppRecalculator;
 use App\Services\InitialOpeningPoster;
 use App\Services\PreClosingValidator;
 use App\Support\ActiveBranch;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
@@ -155,6 +157,42 @@ class FiscalPeriodController extends Controller
         $this->manager->hapus($user, $period);
 
         return back()->with('success', "Periode draf {$period->period_code} dihapus.");
+    }
+
+    /** Hitung ulang HPP rata-rata atas permintaan (matriks peran Addendum 50: Pemilik & Super Admin). */
+    public function hitungUlangHpp(Request $request, FiscalPeriod $period): RedirectResponse
+    {
+        $user = $this->authorizeAkses($request);
+        $this->authorizeMilik($user, $period);
+
+        if (! in_array($period->status, ['OPEN', 'REOPENED'], true)) {
+            throw ValidationException::withMessages([
+                'period' => 'HPP hanya dihitung ulang pada periode yang masih terbuka. Periode tertutup harus dibuka ulang lebih dulu.',
+            ]);
+        }
+
+        if ($period->costing_method === 'FIFO') {
+            throw ValidationException::withMessages([
+                'period' => 'Periode ini memakai FIFO: HPP-nya diambil dari lot yang terpakai sehingga tidak perlu dihitung ulang.',
+            ]);
+        }
+
+        $branchIds = $period->branch_id !== null
+            ? [$period->branch_id]
+            : $user->accessibleBranches()->pluck('branch_id')->all();
+
+        $nota = 0;
+        $selisih = 0.0;
+
+        foreach ($branchIds as $branchId) {
+            $hasil = DB::transaction(fn () => app(HppRecalculator::class)->recalculate($period, $branchId, null, HppRecalculator::TRIGGER_MANUAL, $user));
+            $nota += $hasil['movements_changed'];
+            $selisih += $hasil['new_cogs_value'] - $hasil['old_cogs_value'];
+        }
+
+        return back()->with('success', $nota === 0
+            ? 'HPP sudah sesuai — tidak ada pergerakan stok yang perlu diperbaiki.'
+            : sprintf('HPP dihitung ulang: %d pergerakan diperbaiki, HPP penjualan bergeser Rp%s.', $nota, number_format($selisih, 0, ',', '.')));
     }
 
     public function tutup(Request $request, FiscalPeriod $period): RedirectResponse

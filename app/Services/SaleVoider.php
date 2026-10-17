@@ -98,6 +98,20 @@ class SaleVoider
                 app(StockLedger::class)->reverse($owner, $movement, $voidDate, $user->user_id);
             }
 
+            // Barang keluar SESUDAH nota ini terlanjur memakai rata-rata yang
+            // masih memuat nota ini; hitung ulang HPP-nya (Addendum 41.2).
+            if ($movements->isNotEmpty()) {
+                app(HppRecalculator::class)->recalculate(
+                    $sale->period,
+                    $sale->branch_id,
+                    $movements->pluck('product_id')->unique()->values()->all(),
+                    HppRecalculator::TRIGGER_VOID,
+                    $user,
+                    StockMovement::REF_SALES,
+                    $sale->sale_id,
+                );
+            }
+
             foreach ($sale->payments as $payment) {
                 $payment->update([
                     'status' => Payment::STATUS_VOID,

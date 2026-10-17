@@ -207,6 +207,7 @@ Route::middleware(['auth'])->group(function () {
     Route::post('periode/{period}/opening', [FiscalPeriodController::class, 'opening'])->name('periode.opening');
     Route::post('periode/{period}/buka', [FiscalPeriodController::class, 'buka'])->name('periode.buka');
     Route::delete('periode/{period}', [FiscalPeriodController::class, 'destroy'])->name('periode.destroy');
+    Route::post('periode/{period}/hitung-ulang-hpp', [FiscalPeriodController::class, 'hitungUlangHpp'])->name('periode.hitung-ulang-hpp');
     Route::post('periode/{period}/tutup', [FiscalPeriodController::class, 'tutup'])->name('periode.tutup');
     Route::post('periode/{period}/buka-ulang', [FiscalPeriodController::class, 'ajukanBuka'])->name('periode.buka-ulang');
     Route::post('periode/buka-ulang/{reopenRequest}/setujui', [FiscalPeriodController::class, 'setujuiBuka'])->name('periode.buka-ulang.setujui');

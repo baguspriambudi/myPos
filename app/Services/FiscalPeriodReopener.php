@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\Branch;
 use App\Models\FiscalClosing;
 use App\Models\FiscalPeriod;
 use App\Models\FiscalPeriodLog;
@@ -98,6 +99,15 @@ class FiscalPeriodReopener
                 'reopened_by' => $user->user_id,
                 'updated_by' => $user->user_id,
             ]);
+
+            // Periode yang dibuka ulang dihitung ulang HPP-nya (Addendum 45.3).
+            $branchIds = $period->branch_id !== null
+                ? [$period->branch_id]
+                : Branch::where('owner_id', $period->owner_id)->pluck('branch_id')->all();
+
+            foreach ($branchIds as $branchId) {
+                app(HppRecalculator::class)->recalculate($period->fresh(), $branchId, null, HppRecalculator::TRIGGER_REOPEN, $user, 'REOPEN_REQUEST', $request->reopen_request_id);
+            }
 
             FiscalPeriodLog::create([
                 'fiscal_period_id' => $period->fiscal_period_id,
