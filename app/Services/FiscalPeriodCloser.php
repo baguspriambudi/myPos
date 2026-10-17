@@ -202,6 +202,10 @@ class FiscalPeriodCloser
             $this->catatPembulatan($period, $closing, $baris);
         }
 
+        // Jurnal dasar dibentuk SETELAH movement pembulatan HPP, karena
+        // pembulatan itu sendiri ikut dibukukan (Addendum 53.1).
+        app(JournalBuilder::class)->build($period, $closing, $user);
+
         $period->update([
             'status' => FiscalPeriod::STATUS_CLOSED,
             'closed_at' => now(),

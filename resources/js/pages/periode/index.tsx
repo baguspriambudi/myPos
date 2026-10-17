@@ -8,7 +8,7 @@ import AppLayout from '@/layouts/app-layout';
 import { cn } from '@/lib/utils';
 import type { BreadcrumbItem } from '@/types';
 import { Head, useForm, usePage } from '@inertiajs/react';
-import { CalendarRange, CheckCircle2, CircleAlert, Lock, LockOpen, Plus, RefreshCw, Scale, TriangleAlert, X } from 'lucide-react';
+import { CalendarRange, CheckCircle2, CircleAlert, Download, Lock, LockOpen, Plus, RefreshCw, Scale, TriangleAlert, X } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 const breadcrumbs: BreadcrumbItem[] = [
@@ -457,9 +457,16 @@ export default function PeriodeIndex() {
                                         Ditutup {active.closedAt ? formatDate(active.closedAt) : '—'}
                                         {active.closedBy ? ` oleh ${active.closedBy}` : ''} · snapshot versi {active.snapshotVersion}.
                                     </p>
-                                    <Button size="sm" variant="outline" className="mt-2" onClick={() => setBukaUlangTarget(active)}>
-                                        <LockOpen className="mr-1 h-3.5 w-3.5" /> Ajukan Buka Ulang
-                                    </Button>
+                                    <div className="mt-2 flex flex-wrap gap-2">
+                                        <Button size="sm" variant="outline" onClick={() => setBukaUlangTarget(active)}>
+                                            <LockOpen className="mr-1 h-3.5 w-3.5" /> Ajukan Buka Ulang
+                                        </Button>
+                                        <Button size="sm" variant="outline" asChild>
+                                            <a href={`/periode/${active.id}/jurnal`} download>
+                                                <Download className="mr-1 h-3.5 w-3.5" /> Unduh Jurnal (CSV)
+                                            </a>
+                                        </Button>
+                                    </div>
                                 </div>
                             )}
                         </Panel>

@@ -24,6 +24,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use Inertia\Response;
+use Symfony\Component\HttpFoundation\StreamedResponse;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 /**
@@ -157,6 +158,50 @@ class FiscalPeriodController extends Controller
         $this->manager->hapus($user, $period);
 
         return back()->with('success', "Periode draf {$period->period_code} dihapus.");
+    }
+
+    /**
+     * Jurnal penutupan periode sebagai CSV (Addendum 53.2: setiap periode dapat
+     * di-export sebagai journal entry per closing). Hanya jurnal milik snapshot
+     * yang berlaku; jurnal snapshot REPLACED tidak ikut.
+     */
+    public function jurnal(Request $request, FiscalPeriod $period): StreamedResponse
+    {
+        $user = $this->authorizeAkses($request);
+        $this->authorizeMilik($user, $period);
+
+        $snapshot = $period->snapshot();
+
+        if ($snapshot === null) {
+            throw ValidationException::withMessages(['period' => 'Jurnal baru terbentuk setelah periode ditutup.']);
+        }
+
+        $baris = DB::table('journal_entry_lines')
+            ->join('journal_entries', 'journal_entries.journal_entry_id', '=', 'journal_entry_lines.journal_entry_id')
+            ->join('chart_of_accounts', 'chart_of_accounts.account_id', '=', 'journal_entry_lines.account_id')
+            ->join('branches', 'branches.branch_id', '=', 'journal_entries.branch_id')
+            ->where('journal_entries.fiscal_period_id', $period->fiscal_period_id)
+            ->where('journal_entries.reference_type', 'FISCAL_CLOSING')
+            ->where('journal_entries.reference_id', $snapshot->fiscal_closing_id)
+            ->orderBy('journal_entries.journal_entry_id')
+            ->orderBy('chart_of_accounts.account_code')
+            ->select(
+                'journal_entries.journal_entry_id', 'journal_entries.entry_date', 'journal_entries.entry_type',
+                'branches.branch_code', 'chart_of_accounts.account_code', 'chart_of_accounts.account_name',
+                'journal_entry_lines.debit', 'journal_entry_lines.credit',
+            )
+            ->get();
+
+        return response()->streamDownload(function () use ($baris) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, ['no_jurnal', 'tanggal', 'jenis', 'lokasi', 'kode_akun', 'nama_akun', 'debit', 'kredit']);
+
+            foreach ($baris as $b) {
+                fputcsv($out, [$b->journal_entry_id, $b->entry_date, $b->entry_type, $b->branch_code, $b->account_code, $b->account_name, (float) $b->debit, (float) $b->credit]);
+            }
+
+            fclose($out);
+        }, "jurnal-{$period->period_code}-v{$snapshot->version}.csv", ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
     /** Hitung ulang HPP rata-rata atas permintaan (matriks peran Addendum 50: Pemilik & Super Admin). */
