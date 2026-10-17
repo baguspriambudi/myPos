@@ -99,7 +99,7 @@ class DiscountController extends MasterController
             'discount_name' => ['required', 'string', 'max:150'],
             'discount_scope' => ['required', Rule::in(['ITEM', 'TRANSACTION'])],
             'discount_type' => ['required', Rule::in(['PERCENT', 'AMOUNT'])],
-            'discount_value' => ['required', 'numeric', 'gt:0'],
+            'discount_value' => ['required', 'numeric', 'gt:0', Rule::when($request->input('discount_type') === 'PERCENT', ['max:100'])],
             'max_discount_amount' => ['nullable', 'numeric', 'min:0'],
             'product_id' => ['nullable', Rule::exists('products', 'product_id')->where(fn ($q) => $q->where('owner_id', $ownerId))],
             'category_id' => ['nullable', Rule::exists('product_categories', 'category_id')->where(fn ($q) => $q->where('owner_id', $ownerId))],

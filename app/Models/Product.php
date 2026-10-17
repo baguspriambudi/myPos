@@ -41,6 +41,7 @@ class Product extends Model
     protected $fillable = [
         'owner_id',
         'category_id',
+        'tax_id',
         'product_type',
         'product_name',
         'sku',
@@ -96,6 +97,11 @@ class Product extends Model
     public function category(): BelongsTo
     {
         return $this->belongsTo(ProductCategory::class, 'category_id');
+    }
+
+    public function tax(): BelongsTo
+    {
+        return $this->belongsTo(Tax::class, 'tax_id');
     }
 
     /** Seluruh satuan produk ini beserta konversinya; harga ada di daftar harga. */

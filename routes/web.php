@@ -133,6 +133,7 @@ Route::middleware(['auth'])->group(function () {
     // Penjualan dari layar kasir (Addendum 51.2, 51.4, 52).
     Route::get('kasir', [KasirController::class, 'index'])->name('kasir.index');
     Route::post('kasir/nota', [KasirController::class, 'store'])->name('kasir.nota.store');
+    Route::post('kasir/hitung', [KasirController::class, 'hitung'])->name('kasir.hitung');
     // Shift bukan prasyarat berjualan — lihat SalePoster. Sekadar menaut
     // transaksi yang terjadi selama ia terbuka supaya bisa direkonsiliasi.
     Route::post('kasir/shift/buka', [CashierShiftController::class, 'buka'])->name('kasir.shift.buka');

@@ -31,6 +31,7 @@ class OwnerSettingController extends MasterController
                 'allowNegativeStock' => $owner->allow_negative_stock,
                 'paymentRoundingUnit' => $owner->payment_rounding_unit,
                 'paymentRoundingMode' => $owner->payment_rounding_mode,
+                'pricesIncludeTax' => (bool) $owner->prices_include_tax,
             ],
             'hasOpenPeriod' => $owner->branches()
                 ->join('fiscal_periods', 'fiscal_periods.branch_id', '=', 'branches.branch_id')
@@ -50,6 +51,7 @@ class OwnerSettingController extends MasterController
             'allow_negative_stock' => ['required', 'boolean'],
             'payment_rounding_unit' => ['required', 'integer', Rule::in([0, 100, 500, 1000])],
             'payment_rounding_mode' => ['required', Rule::in(['NEAREST', 'DOWN', 'UP'])],
+            'prices_include_tax' => ['required', 'boolean'],
         ], [], [
             'owner_name' => 'nama usaha',
             'costing_method' => 'metode HPP',

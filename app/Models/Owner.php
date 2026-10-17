@@ -22,6 +22,7 @@ class Owner extends Model
         'allow_negative_stock',
         'payment_rounding_unit',
         'payment_rounding_mode',
+        'prices_include_tax',
         'active',
     ];
 
@@ -29,6 +30,7 @@ class Owner extends Model
     {
         return [
             'allow_negative_stock' => 'boolean',
+            'prices_include_tax' => 'boolean',
             'active' => 'boolean',
             'payment_rounding_unit' => 'integer',
         ];

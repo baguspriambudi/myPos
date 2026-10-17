@@ -58,13 +58,32 @@ interface Nota {
     date: string;
     customer: string | null;
     paymentType: string | null;
+    grossTotal: number;
+    discountTotal: number;
+    taxTotal: number;
     netTotal: number;
     rounding: number;
     paidTotal: number;
     receivableAmount: number | null;
     cashReceived: number | null;
     change: number | null;
-    lines: { name: string; qty: number; uom: string; unitPrice: number; lineTotal: number }[];
+    lines: { name: string; qty: number; uom: string; unitPrice: number; discount: number; lineTotal: number }[];
+}
+
+/** Angka nota dari server (POST /kasir/hitung) — sama persis dengan yang nanti diposting. */
+interface Pratinjau {
+    lines: { productId: number; uomId: number; unitPrice: number; gross: number; discount: number; tax: number; lineTotal: number }[];
+    grossTotal: number;
+    discountTotal: number;
+    taxTotal: number;
+    netTotal: number;
+    taxes: { tax_id: number; name: string; rate: number; base_amount: number; tax_amount: number }[];
+    transactionDiscounts: { id: number; name: string; type: 'PERCENT' | 'AMOUNT'; value: number; amount: number }[];
+}
+
+function xsrfToken(): string {
+    const m = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/);
+    return m ? decodeURIComponent(m[1]) : '';
 }
 
 interface BarisKeranjang {
@@ -109,12 +128,27 @@ export default function KasirIndex() {
         methods: string[];
         creditMethod: string;
         currentShift: Shift | null;
+        canManualDiscount: boolean;
+        pricesIncludeTax: boolean;
         auth: { owner: { roundingUnit: number; roundingMode: 'NEAREST' | 'DOWN' | 'UP' } | null };
         flash: { nota?: Nota | null };
         errors: Record<string, string>;
     };
 
-    const { products, categories, customers, selectedCustomerId, canSell, periodProblem, methods, creditMethod, currentShift, errors } = page;
+    const {
+        products,
+        categories,
+        customers,
+        selectedCustomerId,
+        canSell,
+        periodProblem,
+        methods,
+        creditMethod,
+        currentShift,
+        canManualDiscount,
+        pricesIncludeTax,
+        errors,
+    } = page;
     const roundingUnit = page.auth.owner?.roundingUnit ?? 0;
     const roundingMode = page.auth.owner?.roundingMode ?? 'NEAREST';
 
@@ -128,6 +162,13 @@ export default function KasirIndex() {
     const [notaOpen, setNotaOpen] = useState(false);
     const [shiftBukaOpen, setShiftBukaOpen] = useState(false);
     const [shiftTutupOpen, setShiftTutupOpen] = useState(false);
+    // Diskon nota: master yang dipilih kasir, ATAU manual oleh manajer ke atas.
+    const [discountId, setDiscountId] = useState<number | null>(null);
+    const [manualDiscount, setManualDiscount] = useState('');
+    const [manualReason, setManualReason] = useState('');
+    const [manualOpen, setManualOpen] = useState(false);
+    const [preview, setPreview] = useState<Pratinjau | null>(null);
+    const [previewError, setPreviewError] = useState<string | null>(null);
     const searchRef = useRef<HTMLInputElement>(null);
     // Kunci idempotensi: percobaan ulang karena jaringan lambat memakai nilai
     // yang sama sehingga server mengembalikan nota yang sudah jadi, bukan
@@ -237,9 +278,67 @@ export default function KasirIndex() {
         return { total: Math.round(harga * line.qty), qtyBase: line.qty * line.uom.factor };
     }
 
+    /* ---------------------------------------------------------- pratinjau */
+    // Harga bertingkat, diskon, dan pajak dihitung server dengan kalkulator
+    // yang sama dengan posting. Angka lokal hanya dipakai sesaat sebelum
+    // jawaban server datang.
+
+    const manualAngka = Number(manualDiscount.replace(/\D/g, '')) || 0;
+    const isiPratinjau = useMemo(
+        () =>
+            JSON.stringify({
+                customer_id: selectedCustomerId,
+                discount_id: discountId,
+                manual_discount: manualAngka > 0 ? manualAngka : null,
+                manual_discount_reason: manualAngka > 0 ? manualReason : null,
+                lines: lines.map((l) => ({ product_id: l.product.id, uom_id: l.uom.id, qty: l.qty })),
+            }),
+        [lines, selectedCustomerId, discountId, manualAngka, manualReason],
+    );
+
+    useEffect(() => {
+        if (lines.length === 0) {
+            setPreview(null);
+            setPreviewError(null);
+            return;
+        }
+
+        const ctrl = new AbortController();
+        const t = setTimeout(async () => {
+            try {
+                const res = await fetch('/kasir/hitung', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'X-XSRF-TOKEN': xsrfToken() },
+                    body: isiPratinjau,
+                    signal: ctrl.signal,
+                    credentials: 'same-origin',
+                });
+                const body = await res.json();
+                if (res.ok) {
+                    setPreview(body as Pratinjau);
+                    setPreviewError(null);
+                } else {
+                    const pesan = body?.errors ? (Object.values(body.errors as Record<string, string[]>)[0]?.[0] ?? null) : null;
+                    setPreviewError(pesan ?? body?.message ?? 'Gagal menghitung nota.');
+                }
+            } catch (e) {
+                if ((e as Error).name !== 'AbortError') setPreviewError('Gagal menghubungi server untuk menghitung nota.');
+            }
+        }, 200);
+
+        return () => {
+            clearTimeout(t);
+            ctrl.abort();
+        };
+    }, [isiPratinjau, lines.length]);
+
+    function barisPratinjau(line: BarisKeranjang) {
+        return preview?.lines.find((p) => p.productId === line.product.id && p.uomId === line.uom.id) ?? null;
+    }
+
     /* --------------------------------------------------------------- uang */
 
-    const netTotal = lines.reduce((sum, l) => sum + hargaBaris(l).total, 0);
+    const netTotal = preview?.netTotal ?? lines.reduce((sum, l) => sum + hargaBaris(l).total, 0);
     // Pembulatan hanya berlaku untuk pembayaran tunai (Addendum 51.4); nilai
     // penjualan dan dasar pajaknya sendiri tidak ikut berubah.
     const pembulatan = payment === 'CASH' ? hitungPembulatan(netTotal, roundingUnit, roundingMode) : 0;
@@ -260,7 +359,7 @@ export default function KasirIndex() {
     const uangDiterima = Number(cashReceived.replace(/\D/g, '')) || 0;
     const kembalian = uangDiterima - dibayar;
     const terkunci = !canSell || periodProblem !== null;
-    const bisaBayar = lines.length > 0 && kurangStok.length === 0 && !terkunci;
+    const bisaBayar = lines.length > 0 && kurangStok.length === 0 && !terkunci && preview !== null && previewError === null;
 
     /* ------------------------------------------------------------- kredit */
 
@@ -280,6 +379,9 @@ export default function KasirIndex() {
                 customer_id: selectedCustomerId,
                 cash_received: payment === 'CASH' ? uangDiterima : null,
                 local_uuid: uuidRef.current,
+                discount_id: discountId,
+                manual_discount: manualAngka > 0 ? manualAngka : null,
+                manual_discount_reason: manualAngka > 0 ? manualReason : null,
                 lines: lines.map((l) => ({ product_id: l.product.id, uom_id: l.uom.id, qty: l.qty })),
             },
             {
@@ -287,6 +389,10 @@ export default function KasirIndex() {
                 onSuccess: () => {
                     setLines([]);
                     setCashReceived('');
+                    setDiscountId(null);
+                    setManualDiscount('');
+                    setManualReason('');
+                    setManualOpen(false);
                     setPayOpen(false);
                     setSearch('');
                     uuidRef.current = uuidBaru();
@@ -503,7 +609,9 @@ export default function KasirIndex() {
                         ) : (
                             <ul className="divide-y">
                                 {lines.map((l) => {
-                                    const { total, qtyBase } = hargaBaris(l);
+                                    const { qtyBase } = hargaBaris(l);
+                                    const pr = barisPratinjau(l);
+                                    const total = pr?.lineTotal ?? hargaBaris(l).total;
                                     const lebih = l.product.tracksStock && qtyBase > l.product.stock;
                                     const berharga = l.product.uoms.filter((u) => u.price !== null);
                                     return (
@@ -518,7 +626,8 @@ export default function KasirIndex() {
                                                 <div className="min-w-0 flex-1">
                                                     <p className="truncate text-sm leading-tight font-medium">{l.product.name}</p>
                                                     <p className="text-2xs text-muted-foreground font-mono">
-                                                        {formatRupiah(l.uom.price ?? 0)} / {l.uom.name}
+                                                        {formatRupiah(pr?.unitPrice ?? l.uom.price ?? 0)} / {l.uom.name}
+                                                        {pr && pr.discount > 0 && <span className="text-success ml-1.5">− {formatRupiah(pr.discount)}</span>}
                                                     </p>
                                                 </div>
                                                 <button
@@ -634,7 +743,92 @@ export default function KasirIndex() {
                             </p>
                         )}
 
+                        {lines.length > 0 && ((preview?.transactionDiscounts.length ?? 0) > 0 || canManualDiscount) && (
+                            <div className="space-y-1.5">
+                                <div className="flex flex-wrap items-center gap-1">
+                                    <span className="text-2xs text-muted-foreground mr-1">Diskon nota</span>
+                                    {preview?.transactionDiscounts.map((d) => (
+                                        <button
+                                            key={d.id}
+                                            onClick={() => {
+                                                setDiscountId(discountId === d.id ? null : d.id);
+                                                setManualDiscount('');
+                                                setManualOpen(false);
+                                            }}
+                                            className={cn(
+                                                'text-2xs rounded border px-1.5 py-0.5 transition-colors',
+                                                discountId === d.id ? 'border-primary bg-primary text-primary-foreground' : 'hover:bg-accent',
+                                            )}
+                                            title={`Hemat ${formatRupiah(d.amount)}`}
+                                        >
+                                            {d.name}
+                                        </button>
+                                    ))}
+                                    {canManualDiscount && (
+                                        <button
+                                            onClick={() => {
+                                                setManualOpen(!manualOpen);
+                                                setDiscountId(null);
+                                                if (manualOpen) {
+                                                    setManualDiscount('');
+                                                    setManualReason('');
+                                                }
+                                            }}
+                                            className={cn(
+                                                'text-2xs rounded border border-dashed px-1.5 py-0.5 transition-colors',
+                                                manualOpen ? 'border-primary text-primary' : 'hover:bg-accent',
+                                            )}
+                                        >
+                                            Manual
+                                        </button>
+                                    )}
+                                </div>
+                                {manualOpen && (
+                                    <div className="flex gap-1.5">
+                                        <Input
+                                            inputMode="numeric"
+                                            value={manualDiscount}
+                                            onChange={(e) => setManualDiscount(e.target.value.replace(/\D/g, ''))}
+                                            placeholder="Rp"
+                                            className="h-7 w-24 text-right font-mono text-xs"
+                                            aria-label="Nilai diskon manual"
+                                        />
+                                        <Input
+                                            value={manualReason}
+                                            onChange={(e) => setManualReason(e.target.value)}
+                                            placeholder="Alasan (tercatat di audit log)"
+                                            className="h-7 flex-1 text-xs"
+                                            aria-label="Alasan diskon manual"
+                                        />
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         <dl className="space-y-1 text-sm">
+                            {preview && (preview.discountTotal > 0 || preview.taxTotal > 0) && (
+                                <>
+                                    <div className="flex justify-between">
+                                        <dt className="text-muted-foreground">Subtotal</dt>
+                                        <dd className="font-mono tabular-nums">{formatRupiah(preview.grossTotal)}</dd>
+                                    </div>
+                                    {preview.discountTotal > 0 && (
+                                        <div className="text-success flex justify-between">
+                                            <dt>Diskon</dt>
+                                            <dd className="font-mono tabular-nums">− {formatRupiah(preview.discountTotal)}</dd>
+                                        </div>
+                                    )}
+                                    {preview.taxTotal > 0 && (
+                                        <div className="flex justify-between">
+                                            <dt className="text-muted-foreground">{pricesIncludeTax ? 'Termasuk pajak' : 'Pajak'}</dt>
+                                            <dd className="font-mono tabular-nums">
+                                                {pricesIncludeTax ? '' : '+ '}
+                                                {formatRupiah(preview.taxTotal)}
+                                            </dd>
+                                        </div>
+                                    )}
+                                </>
+                            )}
                             <div className="flex justify-between">
                                 <dt className="text-muted-foreground">Nilai penjualan</dt>
                                 <dd className="font-mono tabular-nums">{formatRupiah(netTotal)}</dd>
@@ -661,10 +855,10 @@ export default function KasirIndex() {
                             </p>
                         )}
 
-                        {pesanGagal && (
+                        {(previewError ?? pesanGagal) && (
                             <p className="text-2xs text-destructive bg-destructive/10 flex items-start gap-1.5 rounded-md px-2.5 py-1.5">
                                 <TriangleAlert className="mt-px h-3 w-3 shrink-0" />
-                                {pesanGagal}
+                                {previewError ?? pesanGagal}
                             </p>
                         )}
 
@@ -791,6 +985,7 @@ export default function KasirIndex() {
                                             <span className="block truncate">{l.name}</span>
                                             <span className="text-2xs text-muted-foreground font-mono">
                                                 {formatQty(l.qty)} {l.uom} × {formatRupiah(l.unitPrice)}
+                                                {l.discount > 0 && ` − ${formatRupiah(l.discount)}`}
                                             </span>
                                         </span>
                                         <span className="shrink-0 font-mono tabular-nums">{formatRupiah(l.lineTotal)}</span>
@@ -799,10 +994,28 @@ export default function KasirIndex() {
                             </ul>
 
                             <dl className="space-y-1">
+                                {nota.discountTotal > 0 && (
+                                    <>
+                                        <div className="flex justify-between">
+                                            <dt className="text-muted-foreground">Subtotal</dt>
+                                            <dd className="font-mono tabular-nums">{formatRupiah(nota.grossTotal)}</dd>
+                                        </div>
+                                        <div className="flex justify-between">
+                                            <dt className="text-muted-foreground">Diskon</dt>
+                                            <dd className="font-mono tabular-nums">− {formatRupiah(nota.discountTotal)}</dd>
+                                        </div>
+                                    </>
+                                )}
                                 <div className="flex justify-between">
                                     <dt className="text-muted-foreground">Nilai penjualan</dt>
                                     <dd className="font-mono tabular-nums">{formatRupiah(nota.netTotal)}</dd>
                                 </div>
+                                {nota.taxTotal > 0 && (
+                                    <div className="flex justify-between">
+                                        <dt className="text-muted-foreground">{pricesIncludeTax ? 'Termasuk pajak' : 'Pajak'}</dt>
+                                        <dd className="font-mono tabular-nums">{formatRupiah(nota.taxTotal)}</dd>
+                                    </div>
+                                )}
                                 {nota.rounding !== 0 && (
                                     <div className="flex justify-between">
                                         <dt className="text-muted-foreground">Pembulatan</dt>

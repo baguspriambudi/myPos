@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Kasir;
 use App\Http\Controllers\Controller;
 use App\Models\CashierShift;
 use App\Models\Customer;
+use App\Models\Owner;
 use App\Models\Payment;
 use App\Models\Product;
 use App\Models\Receivable;
@@ -13,8 +14,10 @@ use App\Models\StockBalance;
 use App\Models\User;
 use App\Services\FiscalPeriodResolver;
 use App\Services\PriceResolver;
+use App\Services\SaleCalculator;
 use App\Services\SalePoster;
 use App\Support\ActiveBranch;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
@@ -34,10 +37,17 @@ class KasirController extends Controller
     /** Gudang tidak melayani penjualan (Addendum 59.2). */
     private const PERAN_DILARANG = [User::ROLE_GUDANG];
 
+    private const ATURAN_DISKON = [
+        'discount_id' => ['nullable', 'integer'],
+        'manual_discount' => ['nullable', 'numeric', 'min:0'],
+        'manual_discount_reason' => ['nullable', 'string', 'max:255'],
+    ];
+
     public function __construct(
         private PriceResolver $prices,
         private SalePoster $poster,
         private FiscalPeriodResolver $periods,
+        private SaleCalculator $calculator,
     ) {}
 
     public function index(Request $request): Response
@@ -62,6 +72,8 @@ class KasirController extends Controller
             'methods' => Payment::TYPES,
             'creditMethod' => Sale::PAYMENT_TYPE_CREDIT,
             'currentShift' => $branch ? $this->currentShift($user->user_id, $branch->branch_id) : null,
+            'canManualDiscount' => in_array($user->role, SaleCalculator::MANUAL_DISCOUNT_ROLES, true),
+            'pricesIncludeTax' => (bool) Owner::find($user->owner_id)?->prices_include_tax,
         ]);
     }
 
@@ -88,6 +100,7 @@ class KasirController extends Controller
             'lines.*.product_id' => ['required', 'integer'],
             'lines.*.uom_id' => ['required', 'integer'],
             'lines.*.qty' => ['required', 'numeric', 'gt:0'],
+            ...self::ATURAN_DISKON,
         ], [], [
             'payment_type' => 'metode pembayaran',
             'lines' => 'isi keranjang',
@@ -96,6 +109,57 @@ class KasirController extends Controller
         $sale = $this->poster->post($user, $branch, $data);
 
         return back()->with('nota', $this->receipt($sale, $data['payment_type'], $data['cash_received'] ?? null));
+    }
+
+    /**
+     * Pratinjau angka nota untuk isi keranjang saat ini — dihitung dengan
+     * SaleCalculator yang sama dengan posting, jadi diskon, pajak, dan harga
+     * bertingkat yang tampil di layar persis yang nanti tersimpan.
+     */
+    public function hitung(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $branch = ActiveBranch::for($user);
+
+        if ($branch === null) {
+            throw ValidationException::withMessages(['branch_id' => 'Anda belum terhubung ke lokasi mana pun.']);
+        }
+
+        $data = $request->validate([
+            'customer_id' => ['nullable', 'integer'],
+            'lines' => ['present', 'array'],
+            'lines.*.product_id' => ['required', 'integer'],
+            'lines.*.uom_id' => ['required', 'integer'],
+            'lines.*.qty' => ['required', 'numeric', 'gt:0'],
+            ...self::ATURAN_DISKON,
+        ]);
+
+        $owner = Owner::findOrFail($user->owner_id);
+        $customer = $this->selectedCustomer(new Request(['pelanggan' => $data['customer_id'] ?? 0]), $owner->owner_id);
+
+        if ($data['lines'] === []) {
+            return response()->json(['lines' => [], 'grossTotal' => 0, 'discountTotal' => 0, 'taxTotal' => 0, 'netTotal' => 0, 'taxes' => [], 'transactionDiscounts' => []]);
+        }
+
+        $hasil = $this->calculator->calculate($owner, $branch, $customer, $data['lines'], now()->toDateString(), $user, $data);
+
+        return response()->json([
+            'lines' => array_map(fn ($l) => [
+                'productId' => $l['product']->product_id,
+                'uomId' => $l['uom']->uom_id,
+                'unitPrice' => $l['unit_price'],
+                'gross' => $l['gross'],
+                'discount' => $l['discount_amount'],
+                'tax' => $l['tax_amount'],
+                'lineTotal' => $l['line_total'],
+            ], $hasil['lines']),
+            'grossTotal' => $hasil['gross_total'],
+            'discountTotal' => $hasil['discount_total'],
+            'taxTotal' => $hasil['tax_total'],
+            'netTotal' => $hasil['net_total'],
+            'taxes' => $hasil['taxes'],
+            'transactionDiscounts' => $hasil['transaction_discounts'],
+        ]);
     }
 
     /**
@@ -272,6 +336,9 @@ class KasirController extends Controller
             'date' => $sale->transaction_date->toDateString(),
             'customer' => $sale->customer?->customer_name,
             'paymentType' => $paymentType,
+            'grossTotal' => (float) $sale->gross_total,
+            'discountTotal' => (float) $sale->discount_total,
+            'taxTotal' => (float) $sale->tax_total,
             'netTotal' => (float) $sale->net_total,
             'rounding' => (float) $sale->rounding_amount,
             'paidTotal' => (float) $sale->paid_total,
@@ -284,6 +351,7 @@ class KasirController extends Controller
                 'qty' => (float) $i->qty,
                 'uom' => $i->uom->uom_name,
                 'unitPrice' => (float) $i->unit_price,
+                'discount' => (float) $i->discount_amount,
                 'lineTotal' => (float) $i->line_total,
             ])->all(),
         ];

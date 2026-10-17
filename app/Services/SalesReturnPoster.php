@@ -194,7 +194,12 @@ class SalesReturnPoster
                 'qty' => $qty,
                 'qty_base' => $qtyBase,
                 'cost_at_return' => (float) $saleItem->cost_at_sale,
-                'refund_amount' => round($qtyBase * (float) $saleItem->unit_price_base, 2),
+                // Proporsional terhadap yang DIBAYAR untuk baris itu (line_total:
+                // sudah dikurangi diskon dan termasuk pajak), bukan harga daftar —
+                // barang yang dibeli dengan diskon tidak boleh direfund penuh.
+                'refund_amount' => (float) $saleItem->qty_base > 0
+                    ? round($qtyBase * (float) $saleItem->line_total / (float) $saleItem->qty_base, 2)
+                    : 0.0,
             ];
         }
 

@@ -57,6 +57,7 @@ interface Produk {
     sku: string;
     barcode: string | null;
     categoryId: number | null;
+    taxId: number | null;
     categoryName: string | null;
     productType: string;
     canSell: boolean;
@@ -81,10 +82,11 @@ interface BarisSatuan {
 }
 
 export default function ProdukMasterIndex() {
-    const { products, filters, categories, units, productTypes, auth } = usePage().props as unknown as {
+    const { products, filters, categories, taxes, units, productTypes, auth } = usePage().props as unknown as {
         products: Paginated<Produk>;
         filters: { q: string; category: number | null };
         categories: { id: number; name: string }[];
+        taxes: { id: number; name: string }[];
         units: MasterSatuan[];
         productTypes: JenisProduk[];
         auth: { user: { isMasterAdmin: boolean } };
@@ -111,6 +113,7 @@ export default function ProdukMasterIndex() {
         sku: '',
         barcode: '',
         category_id: '' as string | number,
+        tax_id: '' as string | number,
         product_type: 'TRADE',
         is_weighted: false as boolean,
         active: true as boolean,
@@ -124,6 +127,7 @@ export default function ProdukMasterIndex() {
             sku: '',
             barcode: '',
             category_id: '',
+            tax_id: '',
             product_type: 'TRADE',
             is_weighted: false,
             active: true,
@@ -140,6 +144,7 @@ export default function ProdukMasterIndex() {
             sku: p.sku,
             barcode: p.barcode ?? '',
             category_id: p.categoryId ?? '',
+            tax_id: p.taxId ?? '',
             product_type: p.productType,
             is_weighted: p.isWeighted,
             active: p.active,
@@ -382,6 +387,14 @@ export default function ProdukMasterIndex() {
                                     onChange={(v) => form.setData('category_id', v)}
                                     placeholder="Tanpa kategori"
                                     options={categories.map((c) => ({ value: c.id, label: c.name }))}
+                                />
+                            </Field>
+                            <Field label="Pajak penjualan" error={form.errors.tax_id}>
+                                <NativeSelect
+                                    value={form.data.tax_id}
+                                    onChange={(v) => form.setData('tax_id', v)}
+                                    placeholder="Tidak dikenai pajak"
+                                    options={taxes.map((t) => ({ value: t.id, label: t.name }))}
                                 />
                             </Field>
                         </div>

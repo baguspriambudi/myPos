@@ -22,6 +22,7 @@ export default function UsahaIndex() {
             allowNegativeStock: boolean;
             paymentRoundingUnit: number;
             paymentRoundingMode: string;
+            pricesIncludeTax: boolean;
         };
         hasOpenPeriod: boolean;
         auth: { user: { isMasterAdmin: boolean } };
@@ -35,6 +36,7 @@ export default function UsahaIndex() {
         allow_negative_stock: owner.allowNegativeStock,
         payment_rounding_unit: owner.paymentRoundingUnit,
         payment_rounding_mode: owner.paymentRoundingMode,
+        prices_include_tax: owner.pricesIncludeTax,
     });
 
     return (
@@ -101,6 +103,22 @@ export default function UsahaIndex() {
                                     <span className="block text-2xs text-muted-foreground">
                                         Penjualan tetap jalan meski stok sistem habis. Hanya nyalakan bila pencatatan
                                         penerimaan sering terlambat.
+                                    </span>
+                                </span>
+                            </label>
+
+                            <label className="flex items-start gap-2">
+                                <Checkbox
+                                    checked={form.data.prices_include_tax}
+                                    onCheckedChange={(v) => form.setData('prices_include_tax', v === true)}
+                                    className="mt-0.5"
+                                    disabled={!bolehUbah}
+                                />
+                                <span className="text-xs">
+                                    <span className="font-medium">Harga jual sudah termasuk pajak</span>
+                                    <span className="block text-2xs text-muted-foreground">
+                                        Pajak dihitung dari dalam harga di daftar harga, jadi harga rak tidak berubah. Matikan bila
+                                        pajak ditambahkan di atas harga. Hanya berlaku untuk produk yang diberi pajak.
                                     </span>
                                 </span>
                             </label>

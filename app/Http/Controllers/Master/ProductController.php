@@ -6,6 +6,7 @@ use App\Models\PriceListItem;
 use App\Models\Product;
 use App\Models\ProductCategory;
 use App\Models\ProductUom;
+use App\Models\Tax;
 use App\Models\Unit;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\RedirectResponse;
@@ -47,6 +48,7 @@ class ProductController extends MasterController
                 'barcode' => $p->barcode,
                 'categoryId' => $p->category_id,
                 'categoryName' => $p->category?->category_name,
+                'taxId' => $p->tax_id,
                 'productType' => $p->product_type,
                 'canSell' => $p->canSell(),
                 'tracksStock' => $p->tracksStock(),
@@ -71,6 +73,12 @@ class ProductController extends MasterController
                 ->orderBy('category_name')
                 ->get()
                 ->map(fn ($c) => ['id' => $c->category_id, 'name' => $c->category_name]),
+            // Pajak penjualan per produk; kosong = tidak dikenai pajak.
+            'taxes' => $this->scopeOwner(Tax::query(), $request)
+                ->where('active', true)
+                ->orderBy('tax_name')
+                ->get()
+                ->map(fn (Tax $t) => ['id' => $t->tax_id, 'name' => "{$t->tax_name} ({$t->tax_rate}%)"]),
             // Satuan nonaktif ikut dikirim agar produk lama yang memakainya
             // tetap terbaca di form; dropdown hanya menawarkan yang aktif.
             'units' => $this->scopeOwner(Unit::query(), $request)
@@ -97,6 +105,7 @@ class ProductController extends MasterController
             $product = Product::create([
                 'owner_id' => $this->ownerId($request),
                 'category_id' => $data['category_id'],
+                'tax_id' => $data['tax_id'] ?? null,
                 'product_type' => $data['product_type'],
                 'product_name' => $data['product_name'],
                 'sku' => $data['sku'],
@@ -121,6 +130,7 @@ class ProductController extends MasterController
         DB::transaction(function () use ($product, $data) {
             $product->update([
                 'category_id' => $data['category_id'],
+                'tax_id' => $data['tax_id'] ?? null,
                 'product_type' => $data['product_type'],
                 'product_name' => $data['product_name'],
                 'sku' => $data['sku'],
@@ -269,6 +279,10 @@ class ProductController extends MasterController
                 'nullable',
                 Rule::exists('product_categories', 'category_id')->where(fn ($q) => $q->where('owner_id', $ownerId)),
             ],
+            'tax_id' => [
+                'nullable',
+                Rule::exists('taxes', 'tax_id')->where(fn ($q) => $q->where('owner_id', $ownerId)),
+            ],
             'product_type' => ['required', Rule::in(Product::TYPES)],
             'is_weighted' => ['required', 'boolean'],
             'active' => ['required', 'boolean'],
@@ -289,6 +303,7 @@ class ProductController extends MasterController
             'product_type' => 'jenis produk',
             'sku' => 'SKU',
             'category_id' => 'kategori',
+            'tax_id' => 'pajak',
         ]);
 
         $this->assertTypeAllowsUoms($data);

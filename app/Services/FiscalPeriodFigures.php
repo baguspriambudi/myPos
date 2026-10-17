@@ -297,17 +297,28 @@ class FiscalPeriodFigures
             ->where('status', SalesReturn::STATUS_POSTED)
             ->sum('refund_total');
 
+        // Porsi pajak di dalam refund retur, sebanding dengan pajak baris asalnya.
+        $pajakRetur = (float) DB::table('sales_return_items')
+            ->join('sales_returns', 'sales_returns.return_id', '=', 'sales_return_items.return_id')
+            ->join('sale_items', 'sale_items.sale_item_id', '=', 'sales_return_items.sale_item_id')
+            ->where('sales_returns.fiscal_period_id', $period->fiscal_period_id)
+            ->where('sales_returns.status', SalesReturn::STATUS_POSTED)
+            ->where('sale_items.line_total', '>', 0)
+            ->sum(DB::raw('sales_return_items.refund_amount * sale_items.tax_amount / sale_items.line_total'));
+
         $expense = (float) Expense::where('fiscal_period_id', $period->fiscal_period_id)
             ->where('status', Expense::STATUS_POSTED)
             ->sum('amount');
 
+        // net_total = yang dibayar pembeli, termasuk pajak. Pajak adalah titipan
+        // untuk negara, bukan pendapatan — penjualan bersih tidak memuatnya.
         return [
             'sale_count' => (int) $sales->c,
             'gross_sales' => round((float) $sales->g, 2),
             'discount_total' => round((float) $sales->d, 2),
             'sales_return_total' => round($retur, 2),
-            'net_sales' => round((float) $sales->n - $retur, 2),
-            'tax_total' => round((float) $sales->t, 2),
+            'net_sales' => round((float) $sales->n - (float) $sales->t - ($retur - $pajakRetur), 2),
+            'tax_total' => round((float) $sales->t - $pajakRetur, 2),
             'payment_rounding_total' => round((float) $sales->r, 2),
             'expense_total' => round($expense, 2),
         ] + $this->bauranPembayaran($period);

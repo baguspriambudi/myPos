@@ -8,14 +8,11 @@ use App\Models\CashTransaction;
 use App\Models\Customer;
 use App\Models\Owner;
 use App\Models\Payment;
-use App\Models\Product;
-use App\Models\ProductUom;
 use App\Models\Receivable;
 use App\Models\Sale;
 use App\Models\SaleItem;
 use App\Models\User;
 use App\Support\CashRounding;
-use App\Support\QtyRule;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -37,14 +34,14 @@ use Illuminate\Validation\ValidationException;
  * `Receivable` (Addendum 41.3). Wajib pelanggan terdaftar dengan
  * `credit_limit` > 0 dan tidak melebihi sisa batasnya.
  *
- * Yang sengaja BELUM ditangani di sini, menunggu tahap berikutnya:
- * diskon (Addendum 61) dan pajak (Addendum 19 — skema belum punya kaitan
- * produk ke pajak).
+ * Harga, diskon, dan pajak dihitung SaleCalculator — tempat yang sama yang
+ * dipakai pratinjau layar kasir. Diskon manual (tanpa master) tercatat di
+ * audit_logs (Addendum 61.2, 62).
  */
 class SalePoster
 {
     public function __construct(
-        private PriceResolver $prices,
+        private SaleCalculator $calculator,
         private StockLedger $stock,
         private DocumentNumberService $numbers,
         private FiscalPeriodResolver $periods,
@@ -58,6 +55,9 @@ class SalePoster
      *     local_uuid?: string|null,
      *     device_id?: string|null,
      *     transaction_date?: string|null,
+     *     discount_id?: int|null,
+     *     manual_discount?: float|null,
+     *     manual_discount_reason?: string|null,
      *     lines: array<int, array{product_id: int, uom_id: int, qty: float}>
      * }  $payload
      */
@@ -96,10 +96,13 @@ class SalePoster
             $isCredit = $paymentType === Sale::PAYMENT_TYPE_CREDIT;
             $shift = $this->openShiftFor($user, $branch);
 
-            $lines = $this->priceLines($owner, $branch, $customer, $payload['lines'], $date);
-
-            $grossTotal = round(array_sum(array_column($lines, 'line_total')), 2);
-            $netTotal = $grossTotal;
+            $hitung = $this->calculator->calculate($owner, $branch, $customer, $payload['lines'], $date, $user, [
+                'discount_id' => $payload['discount_id'] ?? null,
+                'manual_discount' => $payload['manual_discount'] ?? null,
+                'manual_discount_reason' => $payload['manual_discount_reason'] ?? null,
+            ]);
+            $lines = $hitung['lines'];
+            $netTotal = $hitung['net_total'];
 
             if ($isCredit) {
                 if ($customer === null || $customer->is_default) {
@@ -129,13 +132,14 @@ class SalePoster
                 'branch_id' => $branch->branch_id,
                 'shift_id' => $shift?->shift_id,
                 'customer_id' => $customer?->customer_id,
+                'discount_id' => $hitung['discount_id'],
                 'device_id' => $payload['device_id'] ?? null,
                 'local_uuid' => $uuid,
                 'transaction_date' => $date,
                 'status' => Sale::STATUS_POSTED,
-                'gross_total' => $grossTotal,
-                'discount_total' => 0,
-                'tax_total' => 0,
+                'gross_total' => $hitung['gross_total'],
+                'discount_total' => $hitung['discount_total'],
+                'tax_total' => $hitung['tax_total'],
                 'net_total' => $netTotal,
                 'rounding_amount' => $rounding,
                 'paid_total' => $paidTotal,
@@ -170,11 +174,37 @@ class SalePoster
                     'unit_price' => $line['unit_price'],
                     'unit_price_base' => $line['unit_price_base'],
                     'price_list_id' => $line['price_list_id'],
-                    'discount_amount' => 0,
+                    'discount_id' => $line['discount_id'],
+                    'discount_amount' => $line['discount_amount'],
                     'cost_at_sale' => $hasil['cost_at_sale'],
                     'cogs_total' => $hasil['cogs_total'],
-                    'tax_amount' => 0,
+                    'tax_amount' => $line['tax_amount'],
                     'line_total' => $line['line_total'],
+                ]);
+            }
+
+            foreach ($hitung['taxes'] as $pajak) {
+                DB::table('sale_taxes')->insert([
+                    'sale_id' => $sale->sale_id,
+                    'tax_id' => $pajak['tax_id'],
+                    'base_amount' => $pajak['base_amount'],
+                    'tax_amount' => $pajak['tax_amount'],
+                ]);
+            }
+
+            if ($hitung['manual_discount'] > 0) {
+                DB::table('audit_logs')->insert([
+                    'owner_id' => $owner->owner_id,
+                    'branch_id' => $branch->branch_id,
+                    'user_id' => $user->user_id,
+                    'action' => 'CREATE',
+                    'entity_type' => 'sales',
+                    'entity_id' => $sale->sale_id,
+                    'field_name' => 'discount_total',
+                    'new_value' => (string) $hitung['manual_discount'],
+                    'reason' => 'Diskon manual: '.trim((string) $payload['manual_discount_reason']),
+                    'ip_address' => request()->ip(),
+                    'created_at' => now(),
                 ]);
             }
 
@@ -223,79 +253,6 @@ class SalePoster
 
             return $sale->load('items');
         });
-    }
-
-    /**
-     * Ubah baris keranjang menjadi baris berharga.
-     *
-     * @param  array<int, array{product_id: int, uom_id: int, qty: float}>  $rows
-     * @return array<int, array<string, mixed>>
-     */
-    private function priceLines(Owner $owner, Branch $branch, ?Customer $customer, array $rows, string $date): array
-    {
-        $lines = [];
-
-        foreach ($rows as $i => $row) {
-            $qty = (float) ($row['qty'] ?? 0);
-
-            $product = Product::where('owner_id', $owner->owner_id)
-                ->active()
-                ->sellable()
-                ->find($row['product_id'] ?? 0);
-
-            if ($product === null) {
-                throw ValidationException::withMessages([
-                    "lines.{$i}.product_id" => 'Produk tidak dikenal, tidak aktif, atau memang tidak dijual.',
-                ]);
-            }
-
-            $uom = ProductUom::where('product_id', $product->product_id)
-                ->where('active', true)
-                ->find($row['uom_id'] ?? 0);
-
-            if ($uom === null) {
-                throw ValidationException::withMessages([
-                    "lines.{$i}.uom_id" => "Satuan tersebut bukan satuan aktif milik {$product->product_name}.",
-                ]);
-            }
-
-            QtyRule::assert($product, $qty, "lines.{$i}.qty");
-
-            $harga = $this->prices->resolve(
-                $owner->owner_id,
-                $product->product_id,
-                $uom->uom_id,
-                $qty,
-                $branch->branch_id,
-                $customer?->customer_id,
-                $date,
-            );
-
-            // Produk tanpa harga di daftar mana pun tidak boleh dijual — dulu
-            // hal ini jatuh ke harga cadangan dan barang terjual seharga Rp0
-            // tanpa ada yang menyadarinya (Addendum 39.10).
-            if ($harga['source'] === PriceResolver::SOURCE_NONE) {
-                throw ValidationException::withMessages([
-                    "lines.{$i}.product_id" => "{$product->product_name} ({$uom->uom_name}) belum punya harga di daftar harga mana pun sehingga belum boleh dijual.",
-                ]);
-            }
-
-            $unitPrice = (float) $harga['unit_price'];
-            $factor = (float) $uom->conversion_factor;
-
-            $lines[] = [
-                'product' => $product,
-                'uom' => $uom,
-                'qty' => $qty,
-                'qty_base' => round($qty * $factor, 4),
-                'unit_price' => $unitPrice,
-                'unit_price_base' => $factor > 0 ? round($unitPrice / $factor, 2) : $unitPrice,
-                'price_list_id' => $harga['price_list_id'],
-                'line_total' => round($qty * $unitPrice, 2),
-            ];
-        }
-
-        return $lines;
     }
 
     /**
