@@ -14,6 +14,31 @@ jobs:
   ci:
     runs-on: ubuntu-latest
 
+    # Tes myPOS memakai MySQL sungguhan (lihat phpunit.xml): beberapa aturan
+    # bergantung pada ENUM, kunci baris, dan perilaku transaksi MySQL yang
+    # tidak sama di SQLite.
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+          MYSQL_DATABASE: mypos_testing
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=20
+
+    env:
+      DB_CONNECTION: mysql
+      DB_HOST: 127.0.0.1
+      DB_PORT: 3306
+      DB_DATABASE: mypos_testing
+      DB_USERNAME: root
+      DB_PASSWORD: ''
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -23,7 +48,8 @@ jobs:
         with:
           php-version: 8.4
           tools: composer:v2
-          coverage: xdebug
+          extensions: pdo_mysql, mbstring, bcmath, intl
+          coverage: none
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -37,9 +63,6 @@ jobs:
       - name: Build Assets
         run: npm run build
 
-      - name: Create SQLite Database
-        run: touch database/database.sqlite
-
       - name: Install Dependencies
         run: composer install --no-interaction --prefer-dist --optimize-autoloader
 
@@ -50,4 +73,4 @@ jobs:
         run: php artisan key:generate
 
       - name: Tests
-        run: ./vendor/bin/phpunit
+        run: php artisan test

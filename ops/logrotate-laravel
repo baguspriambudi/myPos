@@ -1,0 +1,15 @@
+# Rotasi laravel.log untuk aplikasi Laravel di VPS.
+# Dipasang sebagai /etc/logrotate.d/laravel-apps.
+#
+# copytruncate dipakai karena PHP-FPM membuka file log per request dan tidak
+# perlu diberi sinyal; 14 salinan harian, dikompres.
+/var/www/mypos/storage/logs/*.log /var/www/homeplan/storage/logs/*.log {
+    daily
+    rotate 14
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su www-data www-data
+}

@@ -39,7 +39,14 @@ main() {
     npm ci
     npm run build
 
-    echo "==> [5/7] Jalankan migrasi database"
+    echo "==> [5/7] Backup database, lalu jalankan migrasi"
+    # Migrasi yang salah tidak bisa di-undo dengan aman di produksi; salinan
+    # tepat sebelum migrasi adalah jalan pulangnya (lihat ops/backup-databases.sh).
+    if [[ -x /usr/local/bin/backup-databases.sh ]]; then
+        sudo /usr/local/bin/backup-databases.sh
+    else
+        echo "    !! backup-databases.sh belum terpasang — migrasi berjalan TANPA backup."
+    fi
     php artisan migrate --force
 
     echo "==> [6/7] Bersihkan & bangun ulang cache Laravel"

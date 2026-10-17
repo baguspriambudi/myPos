@@ -174,11 +174,32 @@ cd /var/www/mypos && ./deploy.sh
 
 ---
 
+## Backup & log (sekali pasang)
+
+```bash
+sudo install -m 750 ops/backup-databases.sh /usr/local/bin/backup-databases.sh
+sudo install -m 644 ops/logrotate-laravel /etc/logrotate.d/laravel-apps
+sudo crontab -l 2>/dev/null | { cat; echo '15 2 * * * /usr/local/bin/backup-databases.sh >> /var/log/backup-databases.log 2>&1'; } | sudo crontab -
+```
+
+- Backup harian jam 02:15 untuk `mypos` **dan** `homeplan`, ke
+  `/var/backups/mysql/<app>/`, disimpan 14 hari. Kredensial dibaca dari `.env`
+  masing-masing saat berjalan.
+- `deploy.sh` ikut menjalankan backup yang sama tepat sebelum `migrate`.
+- `storage/logs/*.log` dirotasi harian, 14 salinan, dikompres.
+- **Backup di server yang sama ikut hilang bila servernya hilang** — unduh
+  salinannya ke tempat lain secara berkala.
+
+## CI
+
+`.github/workflows/tests.yml` menjalankan seluruh tes pada MySQL 8 setiap push
+ke `main`/`develop`. `lint.yml` menjaga `tsc` dan Pint untuk kode aplikasi;
+ESLint dilaporkan tanpa menggagalkan build karena enam layar master lama masih
+melanggar `no-unused-expressions`.
+
+---
+
 ## Yang belum ada, supaya tidak dicari
 
-- **Backup database belum dijadwalkan.** Data ini tidak punya salinan di mana
-  pun. Sebelum dipakai berjualan sungguhan, pasang `mysqldump` harian.
 - **Tidak ada queue worker maupun Horizon** — belum ada pekerjaan latar.
-- **Tidak ada log rotation khusus**; `storage/logs/laravel.log` tumbuh terus.
-- **Belum ada workflow CI** di repo ini (myExpansesV2 punya `lint.yml` dan
-  `tests.yml`). Menjalankan `php artisan test` sebelum push masih manual.
+- **Domain + HTTPS** belum dipasang; aplikasi masih di `http://<ip>:8080`.
